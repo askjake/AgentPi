@@ -605,4 +605,4 @@ def health():
     return {'status': 'healthy', 'service': 'dishchat-frontend', 'version': '2.0'}
 
 if __name__ == '__main__':
-    app.run(host=os.environ.get('DISHCHAT_FRONTEND_HOST', '127.0.0.1'), port=int(os.environ.get('DISHCHAT_FRONTEND_PORT', '3000')), debug=False)
+    app.run(host=os.environ.get('DISHCHAT_FRONTEND_HOST', '0.0.0.0'), port=int(os.environ.get('DISHCHAT_FRONTEND_PORT', '3000')), debug=False)

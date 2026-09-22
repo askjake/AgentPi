@@ -9,6 +9,18 @@ Ensure-Directory $Run
 Ensure-Directory $Logs
 Ensure-Directory (Join-Path $Run "workspaces")
 
+# Force child Python processes to use UTF-8 even when stdout/stderr are redirected.
+# Without this, Windows CP1252 can crash startup on Unicode log output.
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
+# Expose the DishChat web surface to the LAN. Keep AgentPi and PostgreSQL
+# loopback-only because they are internal control/data-plane services.
+$env:DISHCHAT_FRONTEND_HOST = "0.0.0.0"
+$env:DISHCHAT_FRONTEND_PORT = "3000"
+$env:AGENTPI_HOST = "127.0.0.1"
+$env:AGENTPI_PORT = "8765"
+
 $AgentPy = Join-Path $Root ".venv-windows\Scripts\python.exe"
 $DishPy = Join-Path $Root "dish-chat\backend\.venv-windows\Scripts\python.exe"
 $Frontend = Join-Path $Root "dish-chat\frontend\server.py"
@@ -89,5 +101,17 @@ if (-not $ok) {
     if (Test-Path $err) { Get-Content $err -Tail 120 }
     throw "One or more services failed health checks."
 }
+
+try {
+    $lanIps = @(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.IPAddress -ne "127.0.0.1" -and
+            $_.IPAddress -notlike "169.254.*"
+        } |
+        Select-Object -ExpandProperty IPAddress -Unique)
+    foreach ($ip in $lanIps) {
+        Write-Host ("LAN access: http://{0}:3000/  (backend http://{0}:8000/)" -f $ip)
+    }
+} catch {}
 
 if ($OpenBrowser) { Start-Process "http://127.0.0.1:3000/" }

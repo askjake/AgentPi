@@ -74,6 +74,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\deployment\windows\instal
 set COVERITY_ASSIST_TOKEN=
 ```
 
+If the wrong Coverity Assist token was entered previously, replace only that secret and resume the installer:
+
+```bat
+powershell -NoProfile -ExecutionPolicy Bypass -File ".\deployment\windows\install.ps1" -ResetCoverityAssistToken
+```
+
+The replacement token is prompted with secure input and overwrites the existing `COVERITY_ASSIST_TOKEN` entry in `dish-chat\backend\.env`. Existing PostgreSQL data is preserved.
+
 ### Windows operations
 
 ```bat

@@ -1,0 +1,1 @@
+﻿{"status":"ok","service":"agentpi","version":"0.1.0-r1r2","inventory":{"total":41,"online":41,"offline":0,"protocols":{"arp":27,"mdns":14},"types":{"host":27,"mdns_service":14}},"runtime":{"mqtt":[],"homeassistant":false}}

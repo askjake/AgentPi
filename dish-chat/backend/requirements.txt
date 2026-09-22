@@ -1,0 +1,17 @@
+# Intelligent Agent Requirements
+# Core
+flask==3.0.0
+flask-cors==4.0.0
+requests==2.31.0
+
+# Database (Async PostgreSQL)
+sqlalchemy==2.0.23
+asyncpg==0.29.0
+psycopg2-binary==2.9.9
+
+# Utilities
+python-dotenv==1.0.0
+
+# Optional: Embeddings & ML (for future semantic search)
+# sentence-transformers==2.2.2
+# numpy==1.24.3

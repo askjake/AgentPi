@@ -1,0 +1,11 @@
+﻿snapshot_utc=20260922T185650Z
+source_root=C:\Users\jacob.montgomery\Documents\AgentPi001-Full\AgentPi001-full-windows-r1-20260922
+expected_git_branch=feature/agentpi-initial
+expected_remote_base=68af6316266f0b13dc7a9bc31fb9b9231b0b2257
+windows_full_stack_verified=true
+local_postgres_required=true
+local_postgres_port=55432
+agentpi_port=8765
+dishchat_backend_port=8000
+dishchat_frontend_port=3000
+windows_langgraph_checkpointer=MemorySaver

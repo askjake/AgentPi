@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Final Syntax Test</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+        .test { background: white; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        .pass { border-left: 4px solid #48bb78; }
+        .fail { border-left: 4px solid #e53e3e; }
+        #log { background: #1e1e1e; color: #00ff00; padding: 10px; font-family: monospace; font-size: 12px; max-height: 400px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Final Enhanced Frontend Test</h1>
+    
+    <div class="test" id="test1">
+        <h3>1. JavaScript Loading</h3>
+        <p id="result1">Testing...</p>
+    </div>
+    
+    <div class="test" id="test2">
+        <h3>2. CONFIG Object</h3>
+        <p id="result2">Testing...</p>
+    </div>
+    
+    <div class="test" id="test3">
+        <h3>3. Navigation Functions</h3>
+        <p id="result3">Testing...</p>
+    </div>
+    
+    <div class="test" id="test4">
+        <h3>4. Analytics Functions</h3>
+        <p id="result4">Testing...</p>
+    </div>
+    
+    <div class="test" id="test5">
+        <h3>5. Backend Connection</h3>
+        <p id="result5">Testing...</p>
+    </div>
+    
+    <h2>Console Output:</h2>
+    <div id="log"></div>
+    
+    <script>
+        const log = (msg) => {
+            const logDiv = document.getElementById("log");
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${time}] ${msg}<br>`;
+            console.log(msg);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        };
+        
+        window.onerror = function(msg, url, line, col, error) {
+            log(`❌ ERROR: ${msg} at ${line}:${col}`);
+            return false;
+        };
+        
+        log("Starting final test...");
+    </script>
+    
+    <script src="static/js/dashboard.js"></script>
+    
+    <script>
+        // Test 1: JavaScript loaded
+        document.getElementById("result1").innerHTML = "✅ JavaScript file loaded successfully!";
+        document.getElementById("test1").classList.add("pass");
+        log("✅ Test 1: JavaScript loaded");
+        
+        // Test 2: CONFIG object
+        try {
+            if (typeof CONFIG !== "undefined" && CONFIG.API_BASE_URL) {
+                document.getElementById("result2").innerHTML = `✅ CONFIG exists<br>API_BASE_URL: ${CONFIG.API_BASE_URL}`;
+                document.getElementById("test2").classList.add("pass");
+                log(`✅ Test 2: CONFIG.API_BASE_URL = ${CONFIG.API_BASE_URL}`);
+            } else {
+                throw new Error("CONFIG not defined");
+            }
+        } catch (e) {
+            document.getElementById("result2").innerHTML = "❌ " + e.message;
+            document.getElementById("test2").classList.add("fail");
+            log("❌ Test 2 failed: " + e.message);
+        }
+        
+        // Test 3: Navigation functions
+        try {
+            if (typeof initializeNavigation === "function" && typeof switchView === "function") {
+                document.getElementById("result3").innerHTML = "✅ Navigation functions exist";
+                document.getElementById("test3").classList.add("pass");
+                log("✅ Test 3: Navigation functions found");
+            } else {
+                throw new Error("Navigation functions missing");
+            }
+        } catch (e) {
+            document.getElementById("result3").innerHTML = "❌ " + e.message;
+            document.getElementById("test3").classList.add("fail");
+            log("❌ Test 3 failed: " + e.message);
+        }
+        
+        // Test 4: Analytics functions
+        try {
+            const analyticsFunc = [
+                "initAnalytics",
+                "loadRealTimeAnalytics",
+                "updateToolRankings",
+                "loadActivityLog",
+                "updateAnalyticsStats"
+            ];
+            
+            const missing = [];
+            analyticsFunc.forEach(fn => {
+                if (typeof window[fn] !== "function") {
+                    missing.push(fn);
+                }
+            });
+            
+            if (missing.length === 0) {
+                document.getElementById("result4").innerHTML = `✅ All ${analyticsFunc.length} analytics functions exist`;
+                document.getElementById("test4").classList.add("pass");
+                log(`✅ Test 4: All analytics functions found`);
+            } else {
+                throw new Error("Missing: " + missing.join(", "));
+            }
+        } catch (e) {
+            document.getElementById("result4").innerHTML = "❌ " + e.message;
+            document.getElementById("test4").classList.add("fail");
+            log("❌ Test 4 failed: " + e.message);
+        }
+        
+        // Test 5: Backend connection
+        fetch(CONFIG.API_BASE_URL + "/health")
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById("result5").innerHTML = `✅ Backend connected<br>Status: ${data.status}<br>Service: ${data.service}`;
+                document.getElementById("test5").classList.add("pass");
+                log(`✅ Test 5: Backend healthy - ${data.service}`);
+            })
+            .catch(err => {
+                document.getElementById("result5").innerHTML = "❌ Backend connection failed: " + err.message;
+                document.getElementById("test5").classList.add("fail");
+                log("❌ Test 5 failed: " + err.message);
+            });
+        
+        log("\n✅ All tests complete!");
+    </script>
+</body>
+</html>

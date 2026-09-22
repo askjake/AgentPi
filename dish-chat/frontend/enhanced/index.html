@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DISH Chat Agent Dashboard</title>
+    <link rel="stylesheet" href="static/css/dashboard.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="dashboard-header">
+        <div class="header-content">
+            <div class="logo-section">
+                <i class="fas fa-robot"></i>
+                <h1>DISH Chat Agent</h1>
+                <span class="status-badge online">ONLINE</span>
+            </div>
+            <nav class="main-nav">
+                <button class="nav-btn active" data-view="overview"><i class="fas fa-dashboard"></i> Overview</button>
+                <button class="nav-btn" data-view="chat"><i class="fas fa-comments"></i> Chat Interface</button>
+                <button class="nav-btn" data-view="tools"><i class="fas fa-tools"></i> Tools</button>
+                <button class="nav-btn" data-view="analytics"><i class="fas fa-chart-line"></i> Analytics</button>
+                <button class="nav-btn" data-view="docs"><i class="fas fa-book"></i> Documentation</button>
+                <button class="nav-btn" data-view="settings"><i class="fas fa-cog"></i> Settings</button>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <div class="dashboard-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <h3><i class="fas fa-info-circle"></i> System Info</h3>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <span class="label">Version:</span>
+                        <span class="value">2.1.0</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="label">Uptime:</span>
+                        <span class="value" id="uptime">0d 0h 0m</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="label">Active Chats:</span>
+                        <span class="value" id="active-chats">0</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="label">Total Sessions:</span>
+                        <span class="value" id="total-sessions">0</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3><i class="fas fa-plug"></i> Available Tools</h3>
+                <div class="tool-list">
+                    <div class="tool-item" data-tool="search">
+                        <i class="fas fa-search"></i>
+                        <span>Search Tools</span>
+                        <span class="tool-count">3</span>
+                    </div>
+                    <div class="tool-item" data-tool="internal">
+                        <i class="fas fa-server"></i>
+                        <span>Internal Tools</span>
+                        <span class="tool-count">2</span>
+                    </div>
+                    <div class="tool-item" data-tool="dev">
+                        <i class="fas fa-code"></i>
+                        <span>Development</span>
+                        <span class="tool-count">5</span>
+                    </div>
+                    <div class="tool-item" data-tool="data">
+                        <i class="fas fa-database"></i>
+                        <span>Data Tools</span>
+                        <span class="tool-count">2</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <h3><i class="fas fa-history"></i> Recent Activity</h3>
+                <div id="recent-activity" class="activity-list">
+                    <!-- Dynamic content -->
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content Views -->
+        <main class="main-content">
+            <!-- Overview View -->
+            <div id="overview-view" class="content-view active">
+                <h2>Agent Overview</h2>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-icon blue"><i class="fas fa-comments"></i></div>
+                        <div class="stat-info">
+                            <h3>Total Conversations</h3>
+                            <p class="stat-value" id="stat-conversations">0</p>
+                            <span class="stat-change positive">+12% this week</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon green"><i class="fas fa-check-circle"></i></div>
+                        <div class="stat-info">
+                            <h3>Successful Operations</h3>
+                            <p class="stat-value" id="stat-success">0</p>
+                            <span class="stat-change positive">98.5% success rate</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon orange"><i class="fas fa-clock"></i></div>
+                        <div class="stat-info">
+                            <h3>Avg Response Time</h3>
+                            <p class="stat-value" id="stat-response">2.3s</p>
+                            <span class="stat-change neutral">-0.2s from last week</span>
+                        </div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-icon purple"><i class="fas fa-tools"></i></div>
+                        <div class="stat-info">
+                            <h3>Tool Invocations</h3>
+                            <p class="stat-value" id="stat-tools">0</p>
+                            <span class="stat-change positive">+18% this week</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="capability-matrix">
+                    <h3>Agent Capabilities Matrix</h3>
+                    <div class="capability-grid">
+                        <div class="capability-card">
+                            <h4><i class="fas fa-search"></i> Search & Discovery</h4>
+                            <ul>
+                                <li><span class="badge">Internal Search</span> - DISH documentation search</li>
+                                <li><span class="badge">Web Search</span> - Privacy-friendly public search</li>
+                                <li><span class="badge">Netra Search</span> - Log & record system</li>
+                            </ul>
+                        </div>
+                        <div class="capability-card">
+                            <h4><i class="fas fa-server"></i> Infrastructure</h4>
+                            <ul>
+                                <li><span class="badge">Kubernetes</span> - Cluster inspection (read-only)</li>
+                                <li><span class="badge">CART</span> - Customer account research</li>
+                                <li><span class="badge">CCTools</span> - Customer care tools</li>
+                            </ul>
+                        </div>
+                        <div class="capability-card">
+                            <h4><i class="fas fa-code"></i> Development</h4>
+                            <ul>
+                                <li><span class="badge">Git</span> - Repository cloning</li>
+                                <li><span class="badge">Python</span> - Code execution</li>
+                                <li><span class="badge">Shell</span> - Secure command execution</li>
+                            </ul>
+                        </div>
+                        <div class="capability-card">
+                            <h4><i class="fas fa-chart-line"></i> Analytics</h4>
+                            <ul>
+                                <li><span class="badge">Viewership</span> - Query viewing data</li>
+                                <li><span class="badge">Popular Services</span> - Top content analysis</li>
+                                <li><span class="badge">Reporting</span> - Automated report generation</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="documentation-quick-access">
+                    <h3>Documentation Quick Access</h3>
+                    <div class="doc-grid">
+                        <a href="#" class="doc-card" data-doc="coverity">
+                            <i class="fas fa-code"></i>
+                            <h4>Coverity Assist API</h4>
+                            <p>Multi-model LLM, endpoints, authentication</p>
+                            <span class="doc-lines">778 lines</span>
+                        </a>
+                        <a href="#" class="doc-card" data-doc="rca">
+                            <i class="fas fa-bug"></i>
+                            <h4>RCA Methodology</h4>
+                            <p>Root cause analysis, incident investigation</p>
+                            <span class="doc-lines">151 lines</span>
+                        </a>
+                        <a href="#" class="doc-card" data-doc="jira">
+                            <i class="fas fa-ticket-alt"></i>
+                            <h4>JIRA Tickets</h4>
+                            <p>Ticket creation, bug reports, tracking</p>
+                            <span class="doc-lines">279 lines</span>
+                        </a>
+                        <a href="#" class="doc-card" data-doc="reports">
+                            <i class="fas fa-file-alt"></i>
+                            <h4>Report Writing</h4>
+                            <p>Report structure, documentation standards</p>
+                            <span class="doc-lines">158 lines</span>
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Interface View -->
+            <div id="chat-view" class="content-view">
+                <div class="chat-container">
+                    <div class="chat-header">
+                        <h2><i class="fas fa-comments"></i> Chat Interface</h2>
+                        <div class="chat-controls">
+                            <button class="btn-secondary" id="new-chat"><i class="fas fa-plus"></i> New Chat</button>
+                            <button class="btn-secondary" id="export-chat"><i class="fas fa-download"></i> Export</button>
+                        </div>
+                    </div>
+                    <div class="chat-layout">
+                        <div class="chat-sidebar">
+                            <h3>Conversations</h3>
+                            <div id="chat-list" class="chat-list">
+                                <!-- Dynamic chat list -->
+                            </div>
+                        </div>
+                        <div class="chat-main">
+                            <div id="chat-messages" class="chat-messages">
+                                <div class="welcome-message">
+                                    <i class="fas fa-robot"></i>
+                                    <h3>Welcome to DISH Chat Agent</h3>
+                                    <p>I'm here to help you with infrastructure, development, analytics, and more!</p>
+                                    <div class="quick-actions">
+                                        <button class="quick-action" data-action="search">
+                                            <i class="fas fa-search"></i> Search Documentation
+                                        </button>
+                                        <button class="quick-action" data-action="cluster">
+                                            <i class="fas fa-server"></i> Check Cluster Status
+                                        </button>
+                                        <button class="quick-action" data-action="viewership">
+                                            <i class="fas fa-chart-line"></i> Query Viewership
+                                        </button>
+                                        <button class="quick-action" data-action="help">
+                                            <i class="fas fa-question-circle"></i> Show Capabilities
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="chat-input-container">
+                                <div class="input-wrapper">
+                                    <textarea id="chat-input" placeholder="Type your message... (Shift+Enter for new line)" rows="1"></textarea>
+                                    <div class="input-actions">
+                                        <button class="btn-icon" id="attach-file" title="Attach file">
+                                            <i class="fas fa-paperclip"></i>
+                                        </button>
+                                        <button class="btn-icon" id="voice-input" title="Voice input">
+                                            <i class="fas fa-microphone"></i>
+                                        </button>
+                                        <button class="btn-primary" id="send-message">
+                                            <i class="fas fa-paper-plane"></i> Send
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="typing-indicator" style="display: none;">
+                                    <span></span><span></span><span></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tools View -->
+            <div id="tools-view" class="content-view">
+                <h2>Agent Tools & Capabilities</h2>
+                <div class="tools-container">
+                    <div class="tool-category">
+                        <h3><i class="fas fa-search"></i> Search Tools</h3>
+                        <div class="tool-cards">
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Internal Search</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Search internal DISH documentation and knowledge base</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> internal_search</span>
+                                    <span><i class="fas fa-database"></i> 5 results max</span>
+                                </div>
+                                <button class="btn-test-tool" data-tool="internal_search">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Public Web Search</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Privacy-friendly web search for current information</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> public_web_search</span>
+                                    <span><i class="fas fa-globe"></i> External API</span>
+                                </div>
+                                <button class="btn-test-tool" data-tool="public_web_search">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Netra Search</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>DISH internal log/record search system</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> netra_search</span>
+                                    <span><i class="fas fa-file-alt"></i> Logs & Records</span>
+                                </div>
+                                <button class="btn-test-tool" data-tool="netra_search">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tool-category">
+                        <h3><i class="fas fa-server"></i> Infrastructure Tools</h3>
+                        <div class="tool-cards">
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Cluster Inspect</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Read-only Kubernetes cluster inspection</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> cluster_inspect</span>
+                                    <span><i class="fas fa-shield-alt"></i> Read-only</span>
+                                </div>
+                                <div class="tool-examples">
+                                    <strong>Common tasks:</strong>
+                                    <code>list sentry pods</code>
+                                    <code>list all pods</code>
+                                    <code>list nodes</code>
+                                </div>
+                                <button class="btn-test-tool" data-tool="cluster_inspect">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>DISH Internal Tools</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Access CART, CCTools, and Portal services</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> dish_internal_tool</span>
+                                    <span><i class="fas fa-users"></i> Customer Support</span>
+                                </div>
+                                <div class="tool-examples">
+                                    <strong>Services:</strong>
+                                    <code>cart</code>
+                                    <code>cctools</code>
+                                    <code>portal</code>
+                                </div>
+                                <button class="btn-test-tool" data-tool="dish_internal_tool">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tool-category">
+                        <h3><i class="fas fa-code"></i> Development Tools</h3>
+                        <div class="tool-cards">
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Git Clone</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Clone or update Git repositories</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> agent_git_clone</span>
+                                </div>
+                                <button class="btn-test-tool" data-tool="agent_git_clone">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Python Execution</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Write and execute Python code</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> agent_run_python</span>
+                                    <span><i class="fas fa-check"></i> Virtualenv</span>
+                                </div>
+                                <button class="btn-test-tool" data-tool="agent_run_python">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Shell Execution</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Execute secure shell commands</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> agent_run_shell</span>
+                                    <span><i class="fas fa-shield-alt"></i> 8-layer security</span>
+                                </div>
+                                <div class="tool-examples">
+                                    <strong>Allowed:</strong>
+                                    <code>kubectl get pods</code>
+                                    <code>kubectl describe</code>
+                                    <code>kubectl logs</code>
+                                </div>
+                                <button class="btn-test-tool" data-tool="agent_run_shell">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="tool-category">
+                        <h3><i class="fas fa-chart-line"></i> Data & Analytics Tools</h3>
+                        <div class="tool-cards">
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Query Viewership</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Query viewership data by time range and service</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> query_viewership</span>
+                                    <span><i class="fas fa-clock"></i> 24hr max range</span>
+                                </div>
+                                <button class="btn-test-tool" data-tool="query_viewership">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                            <div class="tool-detail-card">
+                                <div class="tool-header">
+                                    <h4>Popular Services</h4>
+                                    <span class="status-dot active"></span>
+                                </div>
+                                <p>Get top services by watch hours</p>
+                                <div class="tool-meta">
+                                    <span><i class="fas fa-plug"></i> get_popular_services</span>
+                                    <span><i class="fas fa-trophy"></i> Top 100 max</span>
+                                </div>
+                                <button class="btn-test-tool" data-tool="get_popular_services">
+                                    <i class="fas fa-play"></i> Test Tool
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analytics View -->
+            <div id="analytics-view" class="content-view">
+                <h2>Agent Analytics & Insights</h2>
+                <div class="analytics-container">
+                    <div class="analytics-row">
+                        <div class="analytics-card">
+                            <h3>Tool Usage Over Time</h3>
+                            <canvas id="tool-usage-chart"></canvas>
+                        </div>
+                        <div class="analytics-card">
+                            <h3>Response Time Distribution</h3>
+                            <canvas id="response-time-chart"></canvas>
+                        </div>
+                    </div>
+                    <div class="analytics-row">
+                        <div class="analytics-card">
+                            <h3>Popular Tools</h3>
+                            <div class="tool-ranking">
+                                <div style="text-align: center; padding: 40px; color: #718096;">
+                                    <i class="fas fa-spinner fa-spin" style="font-size: 32px; margin-bottom: 10px;"></i>
+                                    <p>Loading tool rankings...</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="analytics-card">
+                            <h3>Success Rate by Tool</h3>
+                            <div class="success-grid">
+                                <div class="success-item">
+                                    <span class="tool-name">internal_search</span>
+                                    <div class="success-indicator" style="--success: 99%">99%</div>
+                                </div>
+                                <div class="success-item">
+                                    <span class="tool-name">cluster_inspect</span>
+                                    <div class="success-indicator" style="--success: 98%">98%</div>
+                                </div>
+                                <div class="success-item">
+                                    <span class="tool-name">agent_run_python</span>
+                                    <div class="success-indicator" style="--success: 97%">97%</div>
+                                </div>
+                                <div class="success-item">
+                                    <span class="tool-name">query_viewership</span>
+                                    <div class="success-indicator" style="--success: 96%">96%</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="analytics-card full-width">
+                        <h3>Agent Activity Log</h3>
+                        <div class="activity-log">
+                            <table class="log-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>Action</th>
+                                        <th>Tool</th>
+                                        <th>User</th>
+                                        <th>Status</th>
+                                        <th>Duration</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="activity-log-body">
+                                    <!-- Dynamic content -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Documentation View -->
+            <div id="docs-view" class="content-view">
+                <h2>Documentation & Resources</h2>
+                <div class="docs-container">
+                    <div class="docs-sidebar">
+                        <h3>Documentation Files</h3>
+                        <ul class="docs-nav">
+                            <li class="active" data-doc="coverity">
+                                <i class="fas fa-file-code"></i> Coverity Assist API
+                                <span class="doc-badge">778 lines</span>
+                            </li>
+                            <li data-doc="rca">
+                                <i class="fas fa-bug"></i> RCA Methodology
+                                <span class="doc-badge">151 lines</span>
+                            </li>
+                            <li data-doc="jira">
+                                <i class="fas fa-ticket-alt"></i> JIRA Ticket Creation
+                                <span class="doc-badge">279 lines</span>
+                            </li>
+                            <li data-doc="reports">
+                                <i class="fas fa-file-alt"></i> Report Writing
+                                <span class="doc-badge">158 lines</span>
+                            </li>
+                        </ul>
+                        <div class="docs-info">
+                            <h4>Storage Location</h4>
+                            <code>/home/montjac/Jakes-agent/docs/</code>
+                            <h4>Organization</h4>
+                            <p>✓ Well-structured<br>✓ Version controlled<br>✓ Markdown format</p>
+                        </div>
+                    </div>
+                    <div class="docs-content">
+                        <div class="doc-viewer" id="doc-viewer">
+                            <!-- Documentation content loaded here -->
+                            <div class="doc-header">
+                                <h3 id="doc-title">Select a document</h3>
+                                <button class="btn-secondary" id="open-external">
+                                    <i class="fas fa-external-link-alt"></i> Open in Editor
+                                </button>
+                            </div>
+                            <div id="doc-body" class="doc-body">
+                                <p>Select a document from the sidebar to view its contents.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings View -->
+                        <!-- Settings View -->
+                        <div id="settings-view" class="content-view">
+                            <h2><i class="fas fa-cog"></i> System Settings</h2>
+                            
+                            <div class="settings-container">
+                                <!-- Settings Header -->
+                                <div class="settings-header">
+                                    <div class="settings-info">
+                                        <p style="color: #718096; margin: 0;">Configure system behavior, timeouts, and features without code changes.</p>
+                                    </div>
+                                    <div class="settings-actions">
+                                        <button class="btn-primary" id="save-settings">
+                                            <i class="fas fa-save"></i> Save All Changes
+                                        </button>
+                                        <button class="btn-secondary" id="export-settings">
+                                            <i class="fas fa-download"></i> Export
+                                        </button>
+                                        <button class="btn-secondary" id="import-settings">
+                                            <i class="fas fa-upload"></i> Import
+                                        </button>
+                                    </div>
+                                    <input type="file" id="import-file-input" accept=".json" style="display: none;">
+                                </div>
+            
+                                <!-- Search/Filter -->
+                                <div class="settings-filter">
+                                    <input type="text" id="settings-search" placeholder="🔍 Search settings..." 
+                                           style="width: 100%; padding: 12px; border: 1px solid #cbd5e0; border-radius: 6px; font-size: 14px;">
+                                </div>
+            
+                                <!-- Settings Tabs -->
+                                <div class="settings-tabs">
+                                    <button class="settings-tab active" data-tab="backend">
+                                        <i class="fas fa-server"></i> Backend Configuration
+                                    </button>
+                                    <button class="settings-tab" data-tab="frontend">
+                                        <i class="fas fa-desktop"></i> Frontend Configuration
+                                    </button>
+                                    <button class="settings-tab" data-tab="custom-tools">
+                                        <i class="fas fa-puzzle-piece"></i> Custom Tools
+                                    </button>
+                                </div>
+            
+                                <!-- Settings Content -->
+                                <div id="settings-content" class="settings-content">
+                                    <div style="text-align: center; padding: 40px; color: #718096;">
+                                        <i class="fas fa-spinner fa-spin" style="font-size: 32px; margin-bottom: 10px;"></i>
+                                        <p>Loading settings...</p>
+                                    </div>
+                                </div>
+            
+                                <!-- Save Status -->
+                                <div id="settings-status" class="settings-status" style="display: none;">
+                                    <i class="fas fa-check-circle"></i> Settings saved successfully
+                                </div>
+                            </div>
+                        </div>
+        </main>
+    </div>
+
+    <!-- Tool Test Modal -->
+    <div id="tool-test-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Test Tool: <span id="modal-tool-name"></span></h3>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="tool-parameters"></div>
+                <button class="btn-primary" id="execute-tool">Execute Tool</button>
+            </div>
+            <div class="modal-footer">
+                <h4>Results:</h4>
+                <pre id="tool-results">No results yet...</pre>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="static/js/dashboard.js"></script>
+</body>
+</html>

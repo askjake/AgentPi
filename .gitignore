@@ -17,3 +17,24 @@ venv/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# AgentPi001 full-stack runtime / secrets
+.env
+.env.*
+!.env.template
+!.env.example
+**/.env
+**/.env.*
+!**/.env.template
+!**/.env.example
+runtime/
+**/.venv/
+**/.venv-windows/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/*.log
+**/*.pid
+**/node_modules/
+**/postgres-data/
+**/postgresql-*/

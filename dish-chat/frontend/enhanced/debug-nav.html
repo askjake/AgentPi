@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Navigation Debug - agentpi001</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+        .nav-btn { padding: 10px 20px; margin: 5px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
+        .nav-btn.active { background: #0056b3; font-weight: bold; }
+        .content-view { display: none; padding: 20px; margin: 20px 0; border: 2px solid #007bff; background: white; border-radius: 5px; }
+        .content-view.active { display: block; }
+        #log { background: #1e1e1e; color: #00ff00; padding: 15px; font-family: monospace; font-size: 11px; height: 400px; overflow-y: auto; border-radius: 5px; }
+        .test-section { background: white; padding: 15px; margin: 20px 0; border-radius: 5px; border: 1px solid #ddd; }
+        h1 { color: #333; }
+        h2 { color: #007bff; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Navigation Debug Tool - agentpi001@10.73.184.59</h1>
+    
+    <div class="test-section">
+        <h2>Navigation Buttons</h2>
+        <button class="nav-btn active" data-view="overview" onclick="testNav('overview')">Overview</button>
+        <button class="nav-btn" data-view="chat" onclick="testNav('chat')">Chat</button>
+        <button class="nav-btn" data-view="tools" onclick="testNav('tools')">Tools</button>
+        <button class="nav-btn" data-view="analytics" onclick="testNav('analytics')">Analytics</button>
+        <button class="nav-btn" data-view="docs" onclick="testNav('docs')">Docs</button>
+        <button class="nav-btn" data-view="settings" onclick="testNav('settings')">Settings</button>
+    </div>
+    
+    <div class="test-section">
+        <h2>Content Views</h2>
+        <div id="overview-view" class="content-view active">
+            <h3>✅ Overview View</h3>
+            <p>This is the overview page. If you can see this, the view is visible!</p>
+        </div>
+        <div id="chat-view" class="content-view">
+            <h3>✅ Chat View</h3>
+            <p>This is the chat page. You should only see this when Chat is active.</p>
+        </div>
+        <div id="tools-view" class="content-view">
+            <h3>✅ Tools View</h3>
+            <p>This is the tools page. You should only see this when Tools is active.</p>
+        </div>
+        <div id="analytics-view" class="content-view">
+            <h3>✅ Analytics View</h3>
+            <p>This is the analytics page. You should only see this when Analytics is active.</p>
+        </div>
+        <div id="docs-view" class="content-view">
+            <h3>✅ Docs View</h3>
+            <p>This is the documentation page. You should only see this when Docs is active.</p>
+        </div>
+        <div id="settings-view" class="content-view">
+            <h3>✅ Settings View</h3>
+            <p>This is the settings page. You should only see this when Settings is active.</p>
+        </div>
+    </div>
+    
+    <div class="test-section">
+        <h2>Debug Log</h2>
+        <div id="log"></div>
+    </div>
+    
+    <script>
+        const log = (msg, level = "info") => {
+            const logDiv = document.getElementById("log");
+            const time = new Date().toLocaleTimeString();
+            const colors = {info: "#00ff00", error: "#ff0000", warn: "#ffff00", success: "#00ffff"};
+            const color = colors[level] || "#00ff00";
+            logDiv.innerHTML += \`<span style="color:\${color};">[\${time}] \${msg}</span><br>\`;
+            console.log(msg);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        };
+        
+        log("🚀 Debug page loaded", "success");
+        log("Testing navigation system...", "info");
+        
+        let clickCount = 0;
+        
+        function testNav(viewName) {
+            clickCount++;
+            log(\`\\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\`, "info");
+            log(\`🖱️  Click #\${clickCount}: Navigating to "\${viewName}"\`, "warn");
+            
+            try {
+                // Step 1: Hide all views
+                log(\`  Step 1: Hiding all content views...\`, "info");
+                const allViews = document.querySelectorAll(".content-view");
+                log(\`    Found \${allViews.length} content views\`, "info");
+                
+                allViews.forEach((view, index) => {
+                    view.classList.remove("active");
+                    log(\`    ✅ Hid view #\${index + 1}: \${view.id}\`, "info");
+                });
+                
+                // Step 2: Show target view
+                log(\`  Step 2: Showing target view "\${viewName}-view"...\`, "info");
+                const targetView = document.getElementById(\`\${viewName}-view\`);
+                
+                if (targetView) {
+                    targetView.classList.add("active");
+                    log(\`    ✅ SUCCESS: "\${viewName}-view" is now active\`, "success");
+                    
+                    // Check if it's actually visible
+                    const style = window.getComputedStyle(targetView);
+                    log(\`    Display property: \${style.display}\`, "info");
+                    log(\`    Visibility property: \${style.visibility}\`, "info");
+                } else {
+                    log(\`    ❌ ERROR: Element "\${viewName}-view" NOT FOUND!\`, "error");
+                }
+                
+                // Step 3: Update active button
+                log(\`  Step 3: Updating active button...\`, "info");
+                const buttons = document.querySelectorAll(".nav-btn");
+                buttons.forEach(btn => {
+                    btn.classList.remove("active");
+                    if (btn.getAttribute("data-view") === viewName) {
+                        btn.classList.add("active");
+                        log(\`    ✅ Button "\${viewName}" marked as active\`, "success");
+                    }
+                });
+                
+                log(\`✅ Navigation to "\${viewName}" COMPLETE\`, "success");
+                
+            } catch (error) {
+                log(\`❌ ERROR during navigation: \${error.message}\`, "error");
+                log(\`   Stack: \${error.stack}\`, "error");
+            }
+        }
+        
+        // Test on page load
+        log("\\n📊 Initial state check:", "warn");
+        log(\`  Total nav buttons: \${document.querySelectorAll(".nav-btn").length}\`, "info");
+        log(\`  Total content views: \${document.querySelectorAll(".content-view").length}\`, "info");
+        log(\`  Active views: \${document.querySelectorAll(".content-view.active").length}\`, "info");
+        log(\`  Active buttons: \${document.querySelectorAll(".nav-btn.active").length}\`, "info");
+        
+        log("\\n✅ Debug tool ready! Click any navigation button above.", "success");
+    </script>
+</body>
+</html>

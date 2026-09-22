@@ -1,0 +1,285 @@
+#!/usr/bin/env python3
+from flask import Flask, render_template_string
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)
+
+HTML = """<!DOCTYPE html>
+<html>
+<head>
+    <title>DishChat Agent - agentpi001@172.16.235.90</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: white;
+            padding: 15px 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 20px; color: #2d3748; }
+        .header-right { display: flex; align-items: center; gap: 15px; }
+        .mode-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #f7fafc;
+            padding: 6px 12px;
+            border-radius: 20px;
+            border: 1px solid #e2e8f0;
+        }
+        .mode-toggle label {
+            font-size: 12px;
+            color: #4a5568;
+            font-weight: 500;
+        }
+        .toggle-switch {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            background: #cbd5e0;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .toggle-switch.active { background: #48bb78; }
+        .toggle-slider {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            background: white;
+            border-radius: 50%;
+            transition: transform 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .toggle-switch.active .toggle-slider { transform: translateX(20px); }
+        .status-badge {
+            font-size: 12px;
+            padding: 4px 10px;
+            background: #c6f6d5;
+            color: #22543d;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+        .mode-indicator {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+        .mode-simple { background: #e2e8f0; color: #4a5568; }
+        .mode-agent { background: #c6f6d5; color: #22543d; }
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 1200px;
+            width: 100%;
+            margin: 20px auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .message {
+            display: flex;
+            gap: 10px;
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .message.user { justify-content: flex-end; }
+        .message-bubble {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            word-wrap: break-word;
+            line-height: 1.5;
+        }
+        .message.user .message-bubble { background: #667eea; color: white; }
+        .message.assistant .message-bubble { background: #f7fafc; color: #2d3748; border: 1px solid #e2e8f0; }
+        .message.assistant .message-bubble h2 { font-size: 20px; margin: 16px 0 8px 0; color: #2d3748; font-weight: 600; }
+        .message.assistant .message-bubble h3 { font-size: 16px; margin: 12px 0 6px 0; color: #2d3748; font-weight: 600; }
+        .message.assistant .message-bubble p { margin: 8px 0; }
+        .message.assistant .message-bubble ul, .message.assistant .message-bubble ol { margin: 8px 0; padding-left: 24px; }
+        .message.assistant .message-bubble li { margin: 4px 0; }
+        .message.assistant .message-bubble code { background: #2d3748; color: #68d391; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 13px; }
+        .message.assistant .message-bubble pre { background: #2d3748; color: #e2e8f0; padding: 12px; border-radius: 8px; overflow-x: auto; margin: 8px 0; }
+        .message.assistant .message-bubble pre code { background: transparent; padding: 0; color: #68d391; }
+        .message.assistant .message-bubble strong { font-weight: 600; }
+        .message-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+        .message.user .message-avatar { background: #667eea; }
+        .message.assistant .message-avatar { background: #e2e8f0; }
+        .input-container { padding: 20px; background: #f7fafc; border-top: 1px solid #e2e8f0; display: flex; gap: 10px; }
+        #messageInput { flex: 1; padding: 12px 16px; border: 2px solid #e2e8f0; border-radius: 8px; font-size: 15px; outline: none; }
+        #messageInput:focus { border-color: #667eea; }
+        #sendButton { padding: 12px 24px; background: #667eea; color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
+        #sendButton:hover { background: #5a67d8; }
+        #sendButton:disabled { background: #cbd5e0; cursor: not-allowed; }
+        .loading { display: none; text-align: center; padding: 10px; color: #718096; }
+        .loading.active { display: block; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🤖 DishChat <span style="color: #718096; font-size: 14px; font-weight: normal;">agentpi001@172.16.235.90</span></h1>
+        <div class="header-right">
+            <div class="mode-toggle">
+                <label>Simple</label>
+                <div class="toggle-switch" id="modeToggle" onclick="toggleMode()">
+                    <div class="toggle-slider"></div>
+                </div>
+                <label>Agent</label>
+            </div>
+            <span class="mode-indicator mode-simple" id="modeIndicator">SIMPLE MODE</span>
+            <span class="status-badge">● Online</span>
+        </div>
+    </div>
+    <div class="chat-container">
+        <div class="messages-container" id="messagesContainer"></div>
+        <div class="loading" id="loading"><span>🤔 Thinking...</span></div>
+        <div class="input-container">
+            <input type="text" id="messageInput" placeholder="Type your message..." />
+            <button id="sendButton">Send</button>
+        </div>
+    </div>
+    <script>
+        const BACKEND_IP = '172.16.235.90';
+        const messagesContainer = document.getElementById('messagesContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const loading = document.getElementById('loading');
+        const modeToggle = document.getElementById('modeToggle');
+        const modeIndicator = document.getElementById('modeIndicator');
+        
+        let agentMode = false;
+        
+        function toggleMode() {
+            agentMode = !agentMode;
+            
+            if (agentMode) {
+                modeToggle.classList.add('active');
+                modeIndicator.textContent = 'AGENT MODE';
+                modeIndicator.className = 'mode-indicator mode-agent';
+                addMessage('🚀 Switched to Agent Mode - I can now use tools!', 'assistant');
+            } else {
+                modeToggle.classList.remove('active');
+                modeIndicator.textContent = 'SIMPLE MODE';
+                modeIndicator.className = 'mode-indicator mode-simple';
+                addMessage('📝 Switched to Simple Mode - Direct responses only', 'assistant');
+            }
+            
+            localStorage.setItem('agentMode', agentMode);
+        }
+        
+        // Restore mode from localStorage
+        const savedMode = localStorage.getItem('agentMode');
+        if (savedMode === 'true') {
+            agentMode = true;
+            modeToggle.classList.add('active');
+            modeIndicator.textContent = 'AGENT MODE';
+            modeIndicator.className = 'mode-indicator mode-agent';
+        }
+
+        messageInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
+        sendButton.addEventListener('click', sendMessage);
+
+        function addMessage(content, role) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + role;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = role === 'user' ? '👤' : '🤖';
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+            
+            if (role === 'user') {
+                bubble.textContent = content;
+                messageDiv.appendChild(bubble);
+                messageDiv.appendChild(avatar);
+            } else {
+                bubble.innerHTML = marked.parse(content);
+                messageDiv.appendChild(avatar);
+                messageDiv.appendChild(bubble);
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            messageInput.value = '';
+            sendButton.disabled = true;
+            loading.classList.add('active');
+            addMessage(message, 'user');
+
+            try {
+                const url = agentMode 
+                    ? `http://${BACKEND_IP}:8000/api/agent/chat`
+                    : `http://${BACKEND_IP}:8000/api/chat`;
+                
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        messages: [{ role: 'user', content: message }],
+                        mode: agentMode ? 'agent' : 'simple'
+                    })
+                });
+
+                const data = await response.json();
+                addMessage(data.response || 'No response', 'assistant');
+            } catch (error) {
+                addMessage('Sorry, an error occurred. Please try again.', 'assistant');
+            } finally {
+                loading.classList.remove('active');
+                sendButton.disabled = false;
+                messageInput.focus();
+            }
+        }
+
+        messageInput.focus();
+        
+        // Add welcome message
+        addMessage('👋 Welcome! Toggle between **Simple Mode** (direct responses) and **Agent Mode** (can use tools) using the switch above.', 'assistant');
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(HTML)
+
+@app.route('/health')
+def health():
+    return {'status': 'healthy', 'service': 'frontend', 'features': ['mode-toggle']}
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=3000, debug=False)

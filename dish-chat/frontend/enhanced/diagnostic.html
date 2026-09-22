@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Frontend Diagnostic - agentpi001</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+        .test { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; background: white; }
+        .pass { background: #d4edda; border-color: #c3e6cb; }
+        .fail { background: #f8d7da; border-color: #f5c6cb; }
+        button { padding: 10px 20px; margin: 5px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
+        button:hover { background: #0056b3; }
+        #log { background: #1e1e1e; color: #00ff00; padding: 10px; border: 1px solid #333; max-height: 400px; overflow-y: auto; font-family: monospace; font-size: 12px; }
+        h1 { color: #333; }
+        h2 { color: #555; font-size: 1.2rem; margin-bottom: 10px; }
+        .status { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>🔧 Enhanced Frontend Diagnostic - agentpi001@10.73.184.59</h1>
+    
+    <div class="test">
+        <h2>1. JavaScript Load Test</h2>
+        <div id="js-test">Testing...</div>
+    </div>
+    
+    <div class="test">
+        <h2>2. API Connection Test</h2>
+        <div id="api-test">Testing...</div>
+    </div>
+    
+    <div class="test">
+        <h2>3. Navigation Test</h2>
+        <button onclick="testNav('overview')">Overview</button>
+        <button onclick="testNav('chat')">Chat</button>
+        <button onclick="testNav('tools')">Tools</button>
+        <button onclick="testNav('analytics')">Analytics</button>
+        <button onclick="testNav('docs')">Docs</button>
+        <button onclick="testNav('settings')">Settings</button>
+        <div id="nav-test" style="margin-top: 10px;">Click buttons above...</div>
+    </div>
+    
+    <div class="test">
+        <h2>4. Configuration Check</h2>
+        <div id="config-test">Checking...</div>
+    </div>
+    
+    <h2 style="margin-top: 30px;">Debug Log:</h2>
+    <div id="log"></div>
+    
+    <script>
+        const log = (msg) => {
+            const logDiv = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `[${time}] ${msg}<br>`;
+            console.log(msg);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        };
+        
+        // Test 1: JavaScript
+        document.getElementById('js-test').innerHTML = '<span class="status" style="color: green;">✅ JavaScript is working!</span>';
+        document.getElementById('js-test').parentElement.classList.add('pass');
+        log('✅ JavaScript loaded and executing');
+        
+        // Test 2: API Connection
+        const hostname = window.location.hostname;
+        const apiUrl = window.location.protocol + '//' + (hostname !== 'localhost' && hostname !== '127.0.0.1' ? hostname : '10.73.184.59') + ':8000';
+        log(`Testing API at: ${apiUrl}`);
+        log(`Current hostname: ${window.location.hostname}`);
+        log(`Current protocol: ${window.location.protocol}`);
+        
+        fetch(`${apiUrl}/health`)
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('api-test').innerHTML = `<span class="status" style="color: green;">✅ Backend connected!</span><br>Status: ${data.status}<br>Service: ${data.service}<br>Uptime: ${data.uptime}`;
+                document.getElementById('api-test').parentElement.classList.add('pass');
+                log(`✅ Backend health check passed: ${JSON.stringify(data)}`);
+            })
+            .catch(err => {
+                document.getElementById('api-test').innerHTML = `<span class="status" style="color: red;">❌ Backend connection failed:</span><br>${err.message}`;
+                document.getElementById('api-test').parentElement.classList.add('fail');
+                log(`❌ Backend connection error: ${err}`);
+            });
+        
+        // Test 3: Navigation
+        let navCount = 0;
+        function testNav(view) {
+            navCount++;
+            log(`Testing navigation to: ${view}`);
+            document.getElementById('nav-test').innerHTML = `<span class="status">Navigated to: <strong style="color: #007bff;">${view}</strong></span> (Test #${navCount})`;
+            log(`✅ Navigation test to ${view} successful (click #${navCount})`);
+        }
+        
+        // Test 4: Configuration
+        const configInfo = `
+            <strong>Detected Configuration:</strong><br>
+            • Hostname: ${window.location.hostname}<br>
+            • Protocol: ${window.location.protocol}<br>
+            • Port: ${window.location.port || 'default'}<br>
+            • API URL: ${apiUrl}<br>
+            • Full URL: ${window.location.href}
+        `;
+        document.getElementById('config-test').innerHTML = configInfo;
+        document.getElementById('config-test').parentElement.classList.add('pass');
+        log(`Configuration: hostname=${window.location.hostname}, API=${apiUrl}`);
+        
+        log('✅ Diagnostic page fully loaded');
+        log('');
+        log('========================================');
+        log('NEXT STEPS:');
+        log('1. All tests passing? Navigate to main dashboard');
+        log('2. Backend connection failed? Check if backend is running');
+        log('3. JavaScript errors? Check browser console (F12)');
+        log('========================================');
+    </script>
+</body>
+</html>

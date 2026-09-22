@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""
+DishChat Enhanced Frontend with Markdown Rendering
+"""
+from flask import Flask, render_template_string
+from flask_cors import CORS
+
+app = Flask(__name__)
+CORS(app)
+
+CHAT_HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DishChat Agent - agentpi001@172.16.235.90</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            background: white;
+            padding: 15px 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 {
+            font-size: 20px;
+            color: #2d3748;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .status-badge {
+            font-size: 12px;
+            padding: 4px 10px;
+            background: #c6f6d5;
+            color: #22543d;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            max-width: 1200px;
+            width: 100%;
+            margin: 20px auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .message {
+            display: flex;
+            gap: 10px;
+            animation: slideIn 0.3s ease-out;
+        }
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        .message.user {
+            justify-content: flex-end;
+        }
+        .message-bubble {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            word-wrap: break-word;
+            line-height: 1.5;
+        }
+        .message.user .message-bubble {
+            background: #667eea;
+            color: white;
+        }
+        .message.assistant .message-bubble {
+            background: #f7fafc;
+            color: #2d3748;
+            border: 1px solid #e2e8f0;
+        }
+        
+        /* Enhanced formatting for assistant messages */
+        .message.assistant .message-bubble h1,
+        .message.assistant .message-bubble h2,
+        .message.assistant .message-bubble h3 {
+            margin: 16px 0 8px 0;
+            color: #2d3748;
+            font-weight: 600;
+        }
+        .message.assistant .message-bubble h1 { font-size: 24px; }
+        .message.assistant .message-bubble h2 { font-size: 20px; }
+        .message.assistant .message-bubble h3 { font-size: 16px; }
+        
+        .message.assistant .message-bubble p {
+            margin: 8px 0;
+        }
+        
+        .message.assistant .message-bubble ul,
+        .message.assistant .message-bubble ol {
+            margin: 8px 0;
+            padding-left: 24px;
+        }
+        
+        .message.assistant .message-bubble li {
+            margin: 4px 0;
+        }
+        
+        .message.assistant .message-bubble code {
+            background: #2d3748;
+            color: #68d391;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        .message.assistant .message-bubble pre {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 12px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 8px 0;
+        }
+        
+        .message.assistant .message-bubble pre code {
+            background: transparent;
+            padding: 0;
+            color: #68d391;
+        }
+        
+        .message.assistant .message-bubble blockquote {
+            border-left: 4px solid #667eea;
+            padding-left: 12px;
+            margin: 8px 0;
+            color: #4a5568;
+            font-style: italic;
+        }
+        
+        .message.assistant .message-bubble strong {
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        .message.assistant .message-bubble em {
+            font-style: italic;
+            color: #4a5568;
+        }
+        
+        .message.assistant .message-bubble hr {
+            border: none;
+            border-top: 2px solid #e2e8f0;
+            margin: 16px 0;
+        }
+        
+        .message.assistant .message-bubble table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 8px 0;
+        }
+        
+        .message.assistant .message-bubble th,
+        .message.assistant .message-bubble td {
+            border: 1px solid #e2e8f0;
+            padding: 8px;
+            text-align: left;
+        }
+        
+        .message.assistant .message-bubble th {
+            background: #f7fafc;
+            font-weight: 600;
+        }
+        
+        .message-avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .message.user .message-avatar {
+            background: #667eea;
+        }
+        .message.assistant .message-avatar {
+            background: #e2e8f0;
+        }
+        .input-container {
+            padding: 20px;
+            background: #f7fafc;
+            border-top: 1px solid #e2e8f0;
+            display: flex;
+            gap: 10px;
+        }
+        #messageInput {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 15px;
+            outline: none;
+            transition: border-color 0.3s;
+        }
+        #messageInput:focus {
+            border-color: #667eea;
+        }
+        #sendButton {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        #sendButton:hover {
+            background: #5a67d8;
+        }
+        #sendButton:disabled {
+            background: #cbd5e0;
+            cursor: not-allowed;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 10px;
+            color: #718096;
+        }
+        .loading.active {
+            display: block;
+        }
+        .welcome-message {
+            text-align: center;
+            padding: 40px 20px;
+            color: #718096;
+        }
+        .welcome-message h2 {
+            color: #2d3748;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>
+            🤖 DishChat Agent
+            <span style="color: #718096; font-size: 14px; font-weight: normal;">agentpi001@172.16.235.90</span>
+        </h1>
+        <span class="status-badge" id="statusBadge">● Online</span>
+    </div>
+
+    <div class="chat-container">
+        <div class="messages-container" id="messagesContainer">
+            <div class="welcome-message">
+                <h2>Welcome to DishChat Agent</h2>
+                <p>I'm your AI assistant running on agentpi001@172.16.235.90</p>
+                <p style="margin-top: 10px; font-size: 14px;">Ask me anything! I can format responses with:</p>
+                <p style="font-size: 13px; color: #4a5568;">✓ Code blocks ✓ Lists ✓ Tables ✓ Headers ✓ Bold/Italic text</p>
+            </div>
+        </div>
+
+        <div class="loading" id="loading">
+            <span>🤔 Thinking...</span>
+        </div>
+
+        <div class="input-container">
+            <input 
+                type="text" 
+                id="messageInput" 
+                placeholder="Type your message here..."
+                onkeypress="handleKeyPress(event)"
+            >
+            <button id="sendButton" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked@4.0.0/marked.min.js"></script>
+    <script>
+        const API_URL = 'http://172.16.235.90:8000/api/chat';
+        const messagesContainer = document.getElementById('messagesContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const loading = document.getElementById('loading');
+
+        // Configure marked for better formatting
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({
+                breaks: true,
+                gfm: true
+            });
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        }
+
+        function formatMessage(text) {
+            // Use marked.js if available, otherwise do basic formatting
+            if (typeof marked !== 'undefined') {
+                return marked.parse(text);
+            }
+            
+            // Fallback: Basic formatting
+            let formatted = text;
+            
+            // Convert **bold**
+            formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            
+            // Convert *italic*
+            formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>');
+            
+            // Convert `code`
+            formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
+            
+            // Convert code blocks
+            formatted = formatted.replace(/```(\w+)?\n([\s\S]+?)```/g, '<pre><code>$2</code></pre>');
+            
+            // Convert line breaks
+            formatted = formatted.replace(/\n/g, '<br>');
+            
+            // Convert headers
+            formatted = formatted.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+            formatted = formatted.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+            formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+            
+            // Convert lists
+            formatted = formatted.replace(/^- (.+)$/gm, '<li>$1</li>');
+            formatted = formatted.replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>');
+            
+            return formatted;
+        }
+
+        function addMessage(content, role) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role}`;
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'message-avatar';
+            avatar.textContent = role === 'user' ? '👤' : '🤖';
+            
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+            
+            if (role === 'user') {
+                bubble.textContent = content;
+                messageDiv.appendChild(bubble);
+                messageDiv.appendChild(avatar);
+            } else {
+                // Format assistant messages with markdown
+                bubble.innerHTML = formatMessage(content);
+                messageDiv.appendChild(avatar);
+                messageDiv.appendChild(bubble);
+            }
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // Clear input and disable button
+            messageInput.value = '';
+            sendButton.disabled = true;
+            loading.classList.add('active');
+
+            // Add user message
+            addMessage(message, 'user');
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        messages: [
+                            { role: 'user', content: message }
+                        ]
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+
+                const data = await response.json();
+                
+                // Add assistant response
+                const assistantMessage = data.response || data.message || 'No response received';
+                addMessage(assistantMessage, 'assistant');
+
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
+            } finally {
+                loading.classList.remove('active');
+                sendButton.disabled = false;
+                messageInput.focus();
+            }
+        }
+
+        // Auto-focus input on load
+        window.onload = function() {
+            messageInput.focus();
+            
+            // Remove welcome message on first interaction
+            messageInput.addEventListener('input', function() {
+                const welcome = document.querySelector('.welcome-message');
+                if (welcome) welcome.remove();
+            }, { once: true });
+        };
+    </script>
+</body>
+</html>
+
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(CHAT_HTML)
+
+@app.route('/health')
+def health():
+    return {'status': 'healthy', 'service': 'enhanced-frontend', 'device': 'agentpi001'}
+
+if __name__ == '__main__':
+    print("Starting Enhanced DishChat Frontend on port 3000...")
+    app.run(host='0.0.0.0', port=3000, debug=False)

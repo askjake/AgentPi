@@ -41,6 +41,10 @@ class MQTTDiscovery:
         self._stop_event = threading.Event()
         self._lock = threading.RLock()
         self._topic_handlers: Dict[str, MessageHandler] = {}
+        # Preserve the resolved Home Assistant identity for each discovery topic.
+        # Empty retained removal messages contain no unique_id/object_id, so this
+        # map lets removal retire the exact Device emitted by the prior config.
+        self._ha_topic_identities: Dict[str, str] = {}
 
     @property
     def client(self):
@@ -106,7 +110,10 @@ class MQTTDiscovery:
     def _device_from_ha_message(self, topic: str, payload: bytes) -> Optional[Device]:
         now = utcnow()
         if not payload:
-            identity = topic.removesuffix("/config")
+            with self._lock:
+                identity = self._ha_topic_identities.pop(
+                    topic, topic.removesuffix("/config")
+                )
             return Device(
                 id=stable_device_id("mqtt", self.broker, self.port, identity),
                 name=identity.rsplit("/", 1)[-1] or "removed",
@@ -129,6 +136,8 @@ class MQTTDiscovery:
             logger.warning("Ignoring non-object MQTT discovery payload on %s", topic)
             return None
         identity = _ha_identity(topic, config)
+        with self._lock:
+            self._ha_topic_identities[topic] = identity
         name = config.get("name") or config.get("object_id") or identity.rsplit("/", 1)[-1] or "unknown"
         return Device(
             id=stable_device_id("mqtt", self.broker, self.port, identity),
@@ -206,15 +215,23 @@ _disc_lock = threading.RLock()
 
 def start_mqtt_discovery(broker, port=1883, username=None, password=None, on_device=None):
     key = (str(broker), int(port), username or "")
+    stale = None
     with _disc_lock:
         existing = _disc.get(key)
-        if existing is not None and existing.is_running:
+        if existing is not None and existing.is_running and existing.password == password:
             if on_device is not None:
                 existing.on_device = on_device
             return existing
         if existing is not None:
-            _disc.pop(key, None)
-        discovery = MQTTDiscovery(broker, port, username, password, on_device)
+            stale = _disc.pop(key, None)
+
+    # Stop an obsolete connection outside the registry lock so credential
+    # rotation cannot block unrelated cache operations while the worker exits.
+    if stale is not None:
+        stale.stop()
+
+    discovery = MQTTDiscovery(broker, port, username, password, on_device)
+    with _disc_lock:
         _disc[key] = discovery
     discovery.start()
     return discovery

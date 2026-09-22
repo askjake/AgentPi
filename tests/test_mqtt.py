@@ -43,6 +43,7 @@ def test_device_identity_and_removal():
     b=d._device_from_ha_message(topic,b'{"name":"T","unique_id":"u1"}')
     removed=d._device_from_ha_message(topic,b'')
     assert a.id == b.id
+    assert removed.id == a.id
     assert removed.online is False and removed.properties["removed"] is True
 
 
@@ -78,3 +79,60 @@ def test_unique_id_controls_identity_across_topic_name_change():
     a=d._device_from_ha_message("homeassistant/sensor/node/old/config",b'{"unique_id":"stable"}')
     b=d._device_from_ha_message("homeassistant/sensor/node/new/config",b'{"unique_id":"stable"}')
     assert a.id == b.id
+
+
+def test_removal_tracks_latest_identity_for_topic():
+    d = mod.MQTTDiscovery("broker")
+    topic = "homeassistant/sensor/node/temp/config"
+    first = d._device_from_ha_message(topic, b'{"unique_id":"old"}')
+    current = d._device_from_ha_message(topic, b'{"unique_id":"current"}')
+    removed = d._device_from_ha_message(topic, b"")
+    assert first.id != current.id
+    assert removed.id == current.id
+
+
+def test_password_change_restarts_cached_discovery(monkeypatch):
+    class FakeDiscovery:
+        created = []
+
+        def __init__(self, broker, port=1883, username=None, password=None, on_device=None):
+            self.broker = broker
+            self.port = int(port)
+            self.username = username
+            self.password = password
+            self.on_device = on_device
+            self.is_running = True
+            self.started = False
+            self.stopped = False
+            FakeDiscovery.created.append(self)
+
+        def start(self):
+            self.started = True
+            return True
+
+        def stop(self, join_timeout=3.0):
+            self.stopped = True
+            self.is_running = False
+            return True
+
+    monkeypatch.setattr(mod, "MQTTDiscovery", FakeDiscovery)
+    mod._disc.clear()
+    try:
+        first = mod.start_mqtt_discovery(
+            "broker", username="agentpi", password="old"
+        )
+        same = mod.start_mqtt_discovery(
+            "broker", username="agentpi", password="old"
+        )
+        replacement = mod.start_mqtt_discovery(
+            "broker", username="agentpi", password="new"
+        )
+
+        assert same is first
+        assert replacement is not first
+        assert first.stopped is True
+        assert replacement.password == "new"
+        assert replacement.started is True
+        assert len(FakeDiscovery.created) == 2
+    finally:
+        mod._disc.clear()

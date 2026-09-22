@@ -197,6 +197,8 @@ class Settings(BaseSettings):
     # Purpose: Beta report analysis and querying
     # Network: Accessible from 10.*.*.* via Lambda Function URL
     # -------------------------------------------------------------------------
+    BETAREPORT_MCP_TOKEN: str = ""
+
     BETAREPORT_MCP_CONFIG: dict = {
         "beta_report": {
             "transport": "streamable_http",

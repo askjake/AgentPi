@@ -1,6 +1,5 @@
 import logging
 import sys
-import json
 from contextlib import asynccontextmanager
 
 import uvicorn
@@ -42,7 +41,14 @@ logging.getLogger("mcp").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
-logger.debug(f"Settings loaded: {json.dumps(settings.model_dump(), indent=4)}")
+logger.debug(
+    "Settings loaded: name=%s version=%s local=%s pll_provider=%s ell_provider=%s",
+    settings.NAME,
+    settings.VERSION,
+    settings.LOCAL,
+    settings.PLLM_PROVIDER,
+    settings.ELLM_PROVIDER,
+)
 
 
 @asynccontextmanager

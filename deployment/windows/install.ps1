@@ -103,24 +103,148 @@ $LocalDbEnv = Join-Path $Run "local-db.env"
 $AdminEnv = Join-Path $Run "local-db-admin.env"
 $VersionFile = Join-Path $Run "postgresql-version.txt"
 
-if (-not (Test-Path (Join-Path $PgBin "initdb.exe"))) {
-    if (-not (Test-Path $PgZip)) {
-        $url = "https://get.enterprisedb.com/postgresql/postgresql-$PostgresBuild-windows-x64-binaries.zip"
-        Write-Host "Downloading PostgreSQL $PostgresBuild..."
-        Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $PgZip
+function Test-PortablePostgresPayload {
+    $required = @(
+        (Join-Path $PgBin "initdb.exe"),
+        (Join-Path $PgBin "pg_ctl.exe"),
+        (Join-Path $PgBin "pg_isready.exe"),
+        (Join-Path $PgBin "psql.exe"),
+        (Join-Path $PgBin "createdb.exe"),
+        (Join-Path $PgBin "dropdb.exe"),
+        (Join-Path $PgBin "pg_dump.exe"),
+        (Join-Path $PgBin "pg_restore.exe"),
+        (Join-Path $PgHome "pgsql\share\postgres.bki")
+    )
+    foreach ($path in $required) {
+        if (-not (Test-Path $path)) { return $false }
     }
-    if (Test-Path $PgHome) { Remove-Item -Recurse -Force $PgHome }
-    Ensure-Directory $PgHome
-    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
-    if ($tar) {
-        & tar.exe -xf $PgZip -C $PgHome
-        if ($LASTEXITCODE -ne 0) { throw "tar.exe failed to extract PostgreSQL." }
-    } else {
-        Expand-Archive -LiteralPath $PgZip -DestinationPath $PgHome -Force
+    return $true
+}
+
+function Download-PostgresArchive {
+    param([string]$Url,[string]$Destination)
+
+    Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($curl -and $curl.Source) {
+        Write-Host "Downloading PostgreSQL with curl retry support..."
+        & $curl.Source -fL --retry 4 --retry-delay 2 --retry-all-errors -o $Destination $Url
+        if ($LASTEXITCODE -eq 0 -and (Test-Path $Destination) -and (Get-Item $Destination).Length -gt 1MB) {
+            return
+        }
+        Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host "Downloading PostgreSQL with Invoke-WebRequest..."
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $Destination
+    if (-not (Test-Path $Destination) -or (Get-Item $Destination).Length -le 1MB) {
+        throw "PostgreSQL archive download is missing or unexpectedly small."
     }
 }
+
+function Expand-PostgresRuntime {
+    param([string]$Archive,[string]$Destination)
+
+    # The EDB binary ZIP also contains pgAdmin, including a large embedded Python
+    # ZIP that is unnecessary for AgentPi. Some Windows/libarchive combinations
+    # fail while expanding that entry. Extract the PostgreSQL runtime with
+    # Python's zipfile module and deliberately skip pgAdmin/StackBuilder.
+    $extractor = Join-Path $Run "extract-postgresql-runtime.py"
+    $code = @'
+from __future__ import annotations
+
+import sys
+import zipfile
+from pathlib import Path
+
+archive = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+
+skip_prefixes = (
+    "pgsql/pgAdmin 4/",
+    "pgsql/StackBuilder/",
+)
+
+required = (
+    "pgsql/bin/initdb.exe",
+    "pgsql/bin/pg_ctl.exe",
+    "pgsql/bin/psql.exe",
+    "pgsql/bin/pg_dump.exe",
+    "pgsql/bin/pg_restore.exe",
+    "pgsql/share/postgres.bki",
+)
+
+seen = set()
+count = 0
+
+with zipfile.ZipFile(archive, "r") as zf:
+    for info in zf.infolist():
+        name = info.filename.replace("\\", "/")
+        if any(name.startswith(prefix) for prefix in skip_prefixes):
+            continue
+        zf.extract(info, destination)
+        seen.add(name.rstrip("/"))
+        count += 1
+
+missing = [name for name in required if not (destination / name).is_file()]
+if missing:
+    raise SystemExit("required PostgreSQL files missing after extraction: " + ", ".join(missing))
+
+print(f"POSTGRES_RUNTIME_EXTRACTED_FILES={count}")
+'@
+    [IO.File]::WriteAllText($extractor, $code, [Text.UTF8Encoding]::new($false))
+    try {
+        & $Python $extractor $Archive $Destination
+        return ($LASTEXITCODE -eq 0)
+    } finally {
+        Remove-Item -LiteralPath $extractor -Force -ErrorAction SilentlyContinue
+    }
+}
+
+if (-not (Test-PortablePostgresPayload)) {
+    if (Test-Path $PgHome) {
+        Write-Warning "Incomplete PostgreSQL runtime detected; removing partial extraction."
+        Remove-Item -Recurse -Force $PgHome
+    }
+
+    $url = "https://get.enterprisedb.com/postgresql/postgresql-$PostgresBuild-windows-x64-binaries.zip"
+    $installed = $false
+
+    for ($attempt = 1; $attempt -le 3 -and -not $installed; $attempt++) {
+        Write-Host "PostgreSQL runtime bootstrap attempt $attempt of 3..."
+
+        if (-not (Test-Path $PgZip) -or $attempt -gt 1) {
+            Download-PostgresArchive -Url $url -Destination $PgZip
+        }
+
+        if (Test-Path $PgHome) { Remove-Item -Recurse -Force $PgHome }
+        Ensure-Directory $PgHome
+
+        try {
+            $expanded = Expand-PostgresRuntime -Archive $PgZip -Destination $PgHome
+            $installed = $expanded -and (Test-PortablePostgresPayload)
+        } catch {
+            Write-Warning ("PostgreSQL extraction attempt failed: " + $_.Exception.Message)
+            $installed = $false
+        }
+
+        if (-not $installed) {
+            Remove-Item -Recurse -Force $PgHome -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $PgZip -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (-not $installed) {
+        throw "Unable to obtain a complete portable PostgreSQL runtime after 3 attempts."
+    }
+}
+
 foreach ($exe in @("initdb.exe","pg_ctl.exe","pg_isready.exe","psql.exe","createdb.exe","dropdb.exe","pg_dump.exe","pg_restore.exe")) {
     if (-not (Test-Path (Join-Path $PgBin $exe))) { throw "Portable PostgreSQL missing $exe" }
+}
+if (-not (Test-Path (Join-Path $PgHome "pgsql\share\postgres.bki"))) {
+    throw "Portable PostgreSQL is incomplete: pgsql\share\postgres.bki is missing."
 }
 Set-Content -LiteralPath $VersionFile -Value $PostgresBuild -Encoding ASCII
 

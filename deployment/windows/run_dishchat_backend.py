@@ -25,7 +25,7 @@ os.environ["POSTGRES_PORT"] = "55432"
 os.environ["AUTH_DISABLED"] = os.environ.get("AUTH_DISABLED", "true")
 os.environ["LOCAL"] = os.environ.get("LOCAL", "true")
 os.environ["DEBUG"] = os.environ.get("DEBUG", "false")
-os.environ["FASTAPI_HOST"] = "127.0.0.1"
+os.environ["FASTAPI_HOST"] = "0.0.0.0"
 os.environ["FASTAPI_PORT"] = "8000"
 os.environ["AGENTPI_URL"] = "http://127.0.0.1:8765"
 os.environ["AGENT_MODE_WORKDIR"] = str(ROOT / "runtime" / "workspaces")
@@ -38,7 +38,7 @@ import uvicorn
 if __name__ == "__main__":
     uvicorn.run(
         "app.main:app",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=8000,
         reload=False,
         log_level="info",

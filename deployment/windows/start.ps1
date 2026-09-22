@@ -27,7 +27,12 @@ function Is-Healthy([string]$Url) {
     } catch { return $false }
 }
 
-function Start-ManagedProcess([string]$Name,[string]$Exe,[string[]]$Args,[string]$Cwd) {
+function Start-ManagedProcess(
+    [string]$Name,
+    [string]$Exe,
+    [string[]]$ProcessArgs,
+    [string]$Cwd
+) {
     $pidFile = Join-Path $Run "$Name.pid"
     if (Test-Path $pidFile) {
         $pidValue = Get-Content -LiteralPath $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -37,9 +42,28 @@ function Start-ManagedProcess([string]$Name,[string]$Exe,[string[]]$Args,[string
         }
         Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
     }
-    $p = Start-Process -FilePath $Exe -ArgumentList $Args -WorkingDirectory $Cwd `
-        -RedirectStandardOutput (Join-Path $Logs "$Name.out.log") `
-        -RedirectStandardError (Join-Path $Logs "$Name.err.log") -PassThru
+
+    # Do not name this parameter $Args: $args is a PowerShell automatic
+    # variable and the collision can produce an empty/null ArgumentList.
+    $cleanArgs = @(
+        $ProcessArgs |
+            Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) } |
+            ForEach-Object { [string]$_ }
+    )
+
+    $start = @{
+        FilePath = $Exe
+        WorkingDirectory = $Cwd
+        RedirectStandardOutput = (Join-Path $Logs "$Name.out.log")
+        RedirectStandardError = (Join-Path $Logs "$Name.err.log")
+        PassThru = $true
+    }
+    if ($cleanArgs.Count -gt 0) {
+        $start["ArgumentList"] = $cleanArgs
+    }
+
+    Write-Host ("Starting {0}: {1} {2}" -f $Name, $Exe, ($cleanArgs -join " "))
+    $p = Start-Process @start
     Set-Content -LiteralPath $pidFile -Value $p.Id -Encoding ASCII
     Write-Host "$Name PID: $($p.Id)"
 }

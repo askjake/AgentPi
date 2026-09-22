@@ -29,10 +29,10 @@ Later commits on the same branch add deployment hardening and self-install scrip
 
 | Service | Default |
 | --- | --- |
-| DishChat frontend | `3000` |
-| DishChat backend | `8000` |
-| AgentPi sidecar | `8765` |
-| Windows portable PostgreSQL | `55432` |
+| DishChat frontend | `0.0.0.0:3000` |
+| DishChat backend | `0.0.0.0:8000` |
+| AgentPi sidecar | `127.0.0.1:8765` |
+| Windows portable PostgreSQL | `127.0.0.1:55432` |
 | Linux PostgreSQL | `5432` |
 
 ## Supported deployment entry points
@@ -192,13 +192,19 @@ curl -fsS http://127.0.0.1:8000/rest/api/v1/health
 curl -fsS http://127.0.0.1:3000/health
 ```
 
-Open the UI at:
+Open the UI locally at:
 
 ```text
 http://127.0.0.1:3000/
 ```
 
-For LAN access on Linux, use the host IP on port `3000`. The frontend calls the backend on port `8000` of the same hostname.
+The supported deployment binds the DishChat frontend to `0.0.0.0:3000` and backend to `0.0.0.0:8000`, so another device on the LAN can use:
+
+```text
+http://<HOST_LAN_IP>:3000/
+```
+
+The browser automatically calls `http://<HOST_LAN_IP>:8000`. AgentPi (`8765`) and PostgreSQL remain loopback-only by design. On Windows, inbound access can still be blocked by Windows Defender Firewall; allow Python/private-network access or add inbound rules for TCP 3000 and 8000 if required.
 
 ## Database
 

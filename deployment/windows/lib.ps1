@@ -9,37 +9,109 @@ function Ensure-Directory([string]$Path) {
 }
 
 function Resolve-Python313 {
-    $candidates = @()
+    $candidates = New-Object System.Collections.Generic.List[string]
+
     try {
         $p = (& py -3.13 -c "import sys; print(sys.executable)" 2>$null | Select-Object -First 1)
-        if ($LASTEXITCODE -eq 0 -and $p) { $candidates += $p.Trim() }
+        if ($LASTEXITCODE -eq 0 -and $p) { $candidates.Add($p.Trim()) }
     } catch {}
-    $candidates += @(
-        (Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"),
-        "python3.13.exe",
-        "python3.13"
-    )
-    foreach ($candidate in $candidates) {
-        if (-not $candidate) { continue }
+
+    $candidates.Add((Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"))
+    $candidates.Add("python3.13.exe")
+    $candidates.Add("python3.13")
+
+    function Test-Python313([string]$Candidate) {
+        if ([string]::IsNullOrWhiteSpace($Candidate)) { return $false }
         try {
-            & $candidate -c "import sys; assert sys.version_info[:2] == (3,13)" 2>$null
-            if ($LASTEXITCODE -eq 0) { return $candidate }
-        } catch {}
+            & $Candidate -c "import sys; assert sys.version_info[:2] == (3,13)" 2>$null
+            return ($LASTEXITCODE -eq 0)
+        } catch {
+            return $false
+        }
     }
 
-    $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
-    if (-not $winget) {
-        throw "Python 3.13 is required. Install it and rerun."
+    foreach ($candidate in $candidates) {
+        if (Test-Python313 $candidate) { return $candidate }
     }
-    Write-Host "Installing Python 3.13 for the current user..."
-    & winget.exe install --id Python.Python.3.13 -e --scope user --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) { throw "Python 3.13 installation failed." }
+
+    Write-Host "Python 3.13 is not installed. Bootstrapping a per-user installation..."
+
+    # A Windows App Installer execution alias can exist even when winget itself is
+    # missing/broken. Only use winget after proving the executable can run.
+    $wingetPath = $null
+    try {
+        $wingetCmd = Get-Command winget.exe -ErrorAction SilentlyContinue
+        if ($wingetCmd -and $wingetCmd.Source) {
+            & $wingetCmd.Source --version *> $null
+            if ($LASTEXITCODE -eq 0) { $wingetPath = $wingetCmd.Source }
+        }
+    } catch {
+        $wingetPath = $null
+    }
+
+    if ($wingetPath) {
+        try {
+            Write-Host "Trying Python 3.13 installation with winget..."
+            & $wingetPath install --id Python.Python.3.13 -e --scope user --accept-package-agreements --accept-source-agreements
+            if ($LASTEXITCODE -eq 0) {
+                $direct = Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"
+                if (Test-Python313 $direct) { return $direct }
+            }
+        } catch {
+            Write-Warning "winget installation path failed; falling back to the official Python.org installer."
+        }
+    } else {
+        Write-Host "winget is unavailable or its execution alias is broken; using Python.org directly."
+    }
+
+    # Official Python.org Windows x64 installer for the maintained 3.13 series.
+    $pythonVersion = "3.13.15"
+    $pythonUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-amd64.exe"
+    $pythonSha256 = "edec09c4853aeae9ac36efb8c9f95b6b8e2fee65eee56d9767a8b7c69c574403"
+    $installer = Join-Path $env:TEMP "python-$pythonVersion-amd64.exe"
+
+    Write-Host "Downloading official Python $pythonVersion installer..."
+    Invoke-WebRequest -UseBasicParsing -Uri $pythonUrl -OutFile $installer
+
+    $actualSha = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+    if ($actualSha -ne $pythonSha256) {
+        Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+        throw "Python installer SHA-256 verification failed."
+    }
+
+    try {
+        Write-Host "Installing Python $pythonVersion for the current user..."
+        $proc = Start-Process -FilePath $installer -ArgumentList @(
+            "/quiet",
+            "InstallAllUsers=0",
+            "PrependPath=0",
+            "Include_pip=1",
+            "Include_launcher=1",
+            "Include_test=0",
+            "AssociateFiles=0",
+            "Shortcuts=0"
+        ) -Wait -PassThru
+
+        if ($proc.ExitCode -ne 0) {
+            throw "Python.org installer exited with code $($proc.ExitCode)."
+        }
+    } finally {
+        Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue
+    }
 
     $direct = Join-Path $env:LOCALAPPDATA "Programs\Python\Python313\python.exe"
-    if (-not (Test-Path $direct)) {
-        throw "Python 3.13 installed but executable was not found. Open a new terminal and rerun."
+    if (Test-Python313 $direct) { return $direct }
+
+    # Last-resort discovery in case the official installer selected a patch-specific
+    # per-user path that differs from the usual Python313 directory.
+    $pythonRoot = Join-Path $env:LOCALAPPDATA "Programs\Python"
+    if (Test-Path $pythonRoot) {
+        foreach ($candidate in Get-ChildItem -Path $pythonRoot -Filter python.exe -File -Recurse -ErrorAction SilentlyContinue) {
+            if (Test-Python313 $candidate.FullName) { return $candidate.FullName }
+        }
     }
-    return $direct
+
+    throw "Python 3.13 installation completed but a working 3.13 interpreter could not be found."
 }
 
 function Read-DotEnv([string]$Path) {

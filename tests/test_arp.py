@@ -41,3 +41,24 @@ async def test_scan_identity_survives_ip_change(monkeypatch):
     first = (await arp.scan_arp())[0]
     second = (await arp.scan_arp())[0]
     assert first.id == second.id
+
+
+def test_parse_windows_arp_filters_broadcast_and_multicast():
+    text = """Interface: 10.79.83.41 --- 0x7
+  10.79.83.43          c4-65-16-fa-a9-77     dynamic
+  10.79.83.255         ff-ff-ff-ff-ff-ff     static
+  224.0.0.251          01-00-5e-00-00-fb     static
+  239.255.255.250      01-00-5e-7f-ff-fa     static
+"""
+    entries = arp._parse_windows_arp(text)
+    assert entries == [{
+        "ip": "10.79.83.43",
+        "mac": "C4:65:16:FA:A9:77",
+        "iface": "10.79.83.41",
+        "state": "dynamic",
+    }]
+
+
+def test_unicast_neighbor_rejects_multicast_mac_even_on_unicast_ip():
+    assert arp._is_unicast_neighbor("192.0.2.5", "01:00:5E:00:00:01") is False
+    assert arp._is_unicast_neighbor("192.0.2.5", "02:00:00:00:00:01") is True

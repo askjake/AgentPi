@@ -1,0 +1,6 @@
+httpx==0.28.1
+paho-mqtt==2.1.0
+websockets==17.1
+zeroconf==0.151.3
+fastapi==0.141.1
+uvicorn==0.53.0

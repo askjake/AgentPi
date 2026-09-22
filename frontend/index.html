@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AgentPi</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <span class="status-dot" id="status-dot"></span>
+  <div>
+    <h1>AgentPi</h1>
+    <div class="subtitle">Local device discovery and agent tool backend</div>
+  </div>
+</header>
+<main class="main">
+  <div class="controls">
+    <button class="btn-primary" id="scan-btn">Scan Local Network</button>
+    <button class="btn-secondary" id="refresh-btn">Refresh</button>
+    <button class="btn-secondary" id="clear-btn">Clear Inventory</button>
+    <span id="message"></span>
+  </div>
+  <section class="stats">
+    <div class="stat-card"><div class="num" id="stat-total">0</div><div class="lbl">Devices</div></div>
+    <div class="stat-card"><div class="num" id="stat-online">0</div><div class="lbl">Online</div></div>
+    <div class="stat-card"><div class="num" id="stat-protocols">0</div><div class="lbl">Protocols</div></div>
+  </section>
+  <div class="filter-bar" id="filters">
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn" data-filter="arp">ARP</button>
+    <button class="filter-btn" data-filter="mdns">mDNS</button>
+    <button class="filter-btn" data-filter="mqtt">MQTT</button>
+    <button class="filter-btn" data-filter="zigbee">Zigbee</button>
+    <button class="filter-btn" data-filter="homeassistant">Home Assistant</button>
+    <button class="filter-btn" data-filter="rtsp">RTSP</button>
+  </div>
+  <section class="devices-grid" id="devices"></section>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -11,6 +11,7 @@ Windows source:
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
 import platform
@@ -78,6 +79,29 @@ def _normalize_mac(mac: str) -> str:
     return ":".join(compact[i:i + 2] for i in range(0, 12, 2)).upper()
 
 
+def _is_unicast_neighbor(ip: str, mac: str) -> bool:
+    """Reject broadcast/multicast pseudo-neighbors from OS ARP tables."""
+    normalized = _normalize_mac(mac)
+    compact = re.sub(r"[^0-9A-Fa-f]", "", normalized)
+    if len(compact) != 12:
+        return False
+    try:
+        first_octet = int(compact[:2], 16)
+    except ValueError:
+        return False
+    if first_octet & 0x01:
+        return False
+    try:
+        address = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if address.is_multicast or address.is_unspecified:
+        return False
+    if str(address) == "255.255.255.255":
+        return False
+    return True
+
+
 def _oui_type(mac: str) -> Optional[str]:
     return OUI_TYPE_HINTS.get(_normalize_mac(mac)[:8])
 
@@ -109,7 +133,11 @@ def _parse_proc_arp(text: str) -> List[dict]:
             continue
         ip, flags, mac = parts[0], parts[2], _normalize_mac(parts[3])
         iface = parts[5] if len(parts) > 5 else ""
-        if mac != "00:00:00:00:00:00" and flags != "0x0":
+        if (
+            mac != "00:00:00:00:00:00"
+            and flags != "0x0"
+            and _is_unicast_neighbor(ip, mac)
+        ):
             entries.append({"ip": ip, "mac": mac, "iface": iface, "state": "reachable"})
     return entries
 
@@ -137,6 +165,8 @@ def _parse_ip_neigh(text: str) -> List[dict]:
             continue
         ip, iface, mac, state = match.groups()
         if state.upper() in {"FAILED", "INCOMPLETE"}:
+            continue
+        if not _is_unicast_neighbor(ip, mac):
             continue
         entries.append({
             "ip": ip,
@@ -180,6 +210,8 @@ def _parse_windows_arp(text: str) -> List[dict]:
         if not match:
             continue
         ip, mac, state = match.groups()
+        if not _is_unicast_neighbor(ip, mac):
+            continue
         entries.append({
             "ip": ip,
             "mac": _normalize_mac(mac),
@@ -234,6 +266,8 @@ async def scan_arp(
     for entry in await _neighbor_entries():
         mac = _normalize_mac(entry.get("mac", ""))
         if not mac or mac == "00:00:00:00:00:00":
+            continue
+        if not _is_unicast_neighbor(str(entry.get("ip", "")), mac):
             continue
         current = by_mac.get(mac)
         if current is None or current.get("state") == "stale":

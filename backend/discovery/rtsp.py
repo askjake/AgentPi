@@ -1,53 +1,48 @@
-"""
-RTSP / IP Camera Discovery
-Scans common RTSP ports, probes paths, generates thumbnails via ffmpeg.
-"""
+"""Bounded RTSP/IP camera discovery."""
+from __future__ import annotations
+
 import asyncio
 import ipaddress
 import json
 import logging
 import os
-import uuid
-from datetime import datetime, timezone
+import shutil
 from typing import List, Optional
 
-from backend.models import Device
+from backend.models import Device, stable_device_id, utcnow
 
 logger = logging.getLogger(__name__)
 
 RTSP_PORTS = [554, 8554, 10554]
 RTSP_PATHS = [
-    "/",
-    "/stream",
-    "/live",
-    "/live/ch00_0",
-    "/cam/realmonitor",
-    "/h264",
-    "/h264Preview_01_main",
-    "/video1",
-    "/video2",
-    "/mpeg4",
-    "/mpeg4/media.amp",
-    "/axis-media/media.amp",
-    "/MediaInput/h264",
-    "/Streaming/Channels/1",
-    "/Streaming/Channels/101",
-    "/onvif/device_service",
+    "/", "/stream", "/live", "/live/ch00_0", "/cam/realmonitor",
+    "/h264", "/h264Preview_01_main", "/video1", "/video2", "/mpeg4",
+    "/mpeg4/media.amp", "/axis-media/media.amp", "/MediaInput/h264",
+    "/Streaming/Channels/1", "/Streaming/Channels/101", "/onvif/device_service",
 ]
-THUMB_DIR = "/tmp/agentpi_thumbs"
-FFPROBE_TIMEOUT = 8  # seconds
+THUMB_DIR = os.path.join(os.environ.get("TEMP", "/tmp"), "agentpi_thumbs")
+FFPROBE_TIMEOUT = 8
 FFMPEG_THUMB_TIMEOUT = 15
+DEFAULT_MAX_HOSTS = 4096
 
 
-os.makedirs(THUMB_DIR, exist_ok=True)
+async def _terminate_process(proc) -> None:
+    try:
+        if getattr(proc, "returncode", None) is None:
+            proc.kill()
+    except ProcessLookupError:
+        pass
+    except Exception:
+        logger.debug("Failed to kill subprocess", exc_info=True)
+    try:
+        await proc.wait()
+    except Exception:
+        logger.debug("Failed to reap subprocess", exc_info=True)
 
 
 async def _tcp_connect(ip: str, port: int, timeout: float = 2.0) -> bool:
-    """Quick TCP port check."""
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(ip, port), timeout=timeout
-        )
+        _reader, writer = await asyncio.wait_for(asyncio.open_connection(ip, port), timeout=timeout)
         writer.close()
         await writer.wait_closed()
         return True
@@ -56,129 +51,141 @@ async def _tcp_connect(ip: str, port: int, timeout: float = 2.0) -> bool:
 
 
 async def _ffprobe_stream(rtsp_url: str) -> Optional[dict]:
-    """Run ffprobe on an RTSP URL, return stream info JSON or None."""
-    cmd = [
-        "ffprobe",
-        "-v", "quiet",
-        "-rtsp_transport", "tcp",
-        "-print_format", "json",
-        "-show_streams",
-        "-show_format",
-        rtsp_url,
-    ]
+    if shutil.which("ffprobe") is None:
+        logger.debug("ffprobe not installed")
+        return None
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd,
+            "ffprobe", "-v", "quiet", "-rtsp_transport", "tcp",
+            "-print_format", "json", "-show_streams", "-show_format", rtsp_url,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=FFPROBE_TIMEOUT
-        )
-        if proc.returncode == 0:
-            return json.loads(stdout.decode())
+        stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=FFPROBE_TIMEOUT)
+        if proc.returncode != 0:
+            return None
+        payload = json.loads(stdout.decode(errors="replace"))
+        return payload if isinstance(payload, dict) else None
     except asyncio.TimeoutError:
         logger.debug("ffprobe timeout: %s", rtsp_url)
+        if proc is not None:
+            await _terminate_process(proc)
     except Exception as exc:
         logger.debug("ffprobe error for %s: %s", rtsp_url, exc)
+        if proc is not None and getattr(proc, "returncode", None) is None:
+            await _terminate_process(proc)
     return None
 
 
 async def generate_thumbnail(device_id: str, rtsp_url: str) -> Optional[str]:
-    """Generate a JPEG thumbnail from an RTSP stream using ffmpeg."""
+    if shutil.which("ffmpeg") is None:
+        return None
+    os.makedirs(THUMB_DIR, exist_ok=True)
     thumb_path = os.path.join(THUMB_DIR, f"thumb_{device_id}.jpg")
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-rtsp_transport", "tcp",
-        "-i", rtsp_url,
-        "-frames:v", "1",
-        "-q:v", "2",
-        thumb_path,
-    ]
+    try:
+        os.unlink(thumb_path)
+    except FileNotFoundError:
+        pass
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
-            *cmd,
+            "ffmpeg", "-y", "-rtsp_transport", "tcp", "-i", rtsp_url,
+            "-frames:v", "1", "-q:v", "2", thumb_path,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL,
         )
         await asyncio.wait_for(proc.communicate(), timeout=FFMPEG_THUMB_TIMEOUT)
-        if os.path.exists(thumb_path):
+        if proc.returncode == 0 and os.path.isfile(thumb_path) and os.path.getsize(thumb_path) > 0:
             return thumb_path
+    except asyncio.TimeoutError:
+        logger.debug("ffmpeg thumbnail timeout for %s", rtsp_url)
+        if proc is not None:
+            await _terminate_process(proc)
     except Exception as exc:
         logger.debug("ffmpeg thumbnail error for %s: %s", rtsp_url, exc)
+        if proc is not None and getattr(proc, "returncode", None) is None:
+            await _terminate_process(proc)
     return None
 
 
 async def _probe_host(ip: str) -> Optional[Device]:
-    """Try all RTSP ports/paths on a host, return Device if found."""
-    now = datetime.now(timezone.utc)
+    now = utcnow()
     for port in RTSP_PORTS:
         if not await _tcp_connect(ip, port):
             continue
-        logger.info("RTSP port %d open on %s — probing paths...", port, ip)
         for path in RTSP_PATHS:
             rtsp_url = f"rtsp://{ip}:{port}{path}"
             stream_info = await _ffprobe_stream(rtsp_url)
-            if stream_info:
-                streams = stream_info.get("streams", [])
-                video_streams = [s for s in streams if s.get("codec_type") == "video"]
-                codec = video_streams[0].get("codec_name", "unknown") if video_streams else "unknown"
-                width = video_streams[0].get("width", 0) if video_streams else 0
-                height = video_streams[0].get("height", 0) if video_streams else 0
-
-                dev_id = str(uuid.uuid5(uuid.NAMESPACE_OID, f"rtsp:{ip}:{port}{path}"))
-
-                # Generate thumbnail asynchronously (best-effort)
-                thumb_path = await generate_thumbnail(dev_id, rtsp_url)
-
-                dev = Device(
-                    id=dev_id,
-                    name=f"IP Camera @ {ip}:{port}",
-                    device_type="camera_ip",
-                    address=ip,
-                    port=port,
-                    protocol="rtsp",
-                    properties={
-                        "rtsp_url": rtsp_url,
-                        "rtsp_path": path,
-                        "codec": codec,
-                        "resolution": f"{width}x{height}" if width else "unknown",
-                        "stream_count": len(streams),
-                        "thumbnail": thumb_path or "",
-                        "ffprobe": stream_info,
-                    },
-                    online=True,
-                    first_seen=now,
-                    last_seen=now,
-                )
-                logger.info("RTSP camera found: %s %s (%s %dx%d)", ip, path, codec, width, height)
-                return dev
+            if not stream_info:
+                continue
+            streams = stream_info.get("streams", [])
+            if not isinstance(streams, list):
+                streams = []
+            video_streams = [s for s in streams if isinstance(s, dict) and s.get("codec_type") == "video"]
+            video = video_streams[0] if video_streams else {}
+            codec = video.get("codec_name", "unknown")
+            width = video.get("width", 0)
+            height = video.get("height", 0)
+            dev_id = stable_device_id("rtsp", ip, port, path)
+            thumb_path = await generate_thumbnail(dev_id, rtsp_url)
+            return Device(
+                id=dev_id,
+                name=f"IP Camera @ {ip}:{port}",
+                device_type="camera_ip",
+                address=ip,
+                port=port,
+                protocol="rtsp",
+                properties={
+                    "rtsp_url": rtsp_url,
+                    "rtsp_path": path,
+                    "codec": codec,
+                    "resolution": f"{width}x{height}" if width else "unknown",
+                    "stream_count": len(streams),
+                    "thumbnail": thumb_path or "",
+                    "ffprobe": stream_info,
+                },
+                online=True,
+                first_seen=now,
+                last_seen=now,
+            )
     return None
 
 
-async def scan_rtsp(cidr: str, concurrency: int = 20) -> List[Device]:
-    """Scan a CIDR range for RTSP cameras."""
+def _host_count_upper_bound(network) -> int:
+    # Conservative bound sufficient to reject huge CIDRs before iteration.
+    return int(network.num_addresses)
+
+
+async def scan_rtsp(cidr: str, concurrency: int = 20, max_hosts: int = DEFAULT_MAX_HOSTS) -> List[Device]:
     try:
         network = ipaddress.ip_network(cidr, strict=False)
     except ValueError as exc:
-        logger.error("Invalid CIDR: %s — %s", cidr, exc)
-        return []
-
-    hosts = list(network.hosts())
-    logger.info("Scanning %d hosts for RTSP cameras...", len(hosts))
+        return [Device.error_device("rtsp", f"invalid CIDR {cidr!r}: {exc}")]
+    if concurrency < 1 or concurrency > 256:
+        return [Device.error_device("rtsp", "concurrency must be between 1 and 256")]
+    if max_hosts < 1:
+        return [Device.error_device("rtsp", "max_hosts must be >= 1")]
+    if _host_count_upper_bound(network) > max_hosts + 2:
+        return [Device.error_device(
+            "rtsp",
+            f"CIDR too large: {network.num_addresses} addresses exceeds max_hosts={max_hosts}",
+        )]
 
     semaphore = asyncio.Semaphore(concurrency)
-    devices = []
 
-    async def _bounded(ip):
+    async def bounded(ip):
         async with semaphore:
             return await _probe_host(str(ip))
 
-    results = await asyncio.gather(*[_bounded(ip) for ip in hosts], return_exceptions=True)
-    for r in results:
-        if isinstance(r, Device):
-            devices.append(r)
-
-    logger.info("RTSP scan complete: %d cameras found", len(devices))
+    tasks = [asyncio.create_task(bounded(ip)) for ip in network.hosts()]
+    if not tasks:
+        return []
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    devices: List[Device] = []
+    for result in results:
+        if isinstance(result, Device):
+            devices.append(result)
+        elif isinstance(result, Exception):
+            logger.warning("RTSP host probe failed: %s", result)
     return devices

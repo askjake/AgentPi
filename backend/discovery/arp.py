@@ -1,42 +1,40 @@
 """
-ARP Table Scanner + MAC Vendor Lookup
-Reads /proc/net/arp and ip neigh, resolves OUI to manufacturer.
+ARP / neighbor-table discovery with optional MAC vendor lookup.
+
+Linux sources:
+- /proc/net/arp
+- `ip neigh show`
+
+Windows source:
+- `arp -a`
 """
+from __future__ import annotations
+
 import asyncio
-import re
-import uuid
 import logging
-from datetime import datetime, timezone
-from typing import List, Optional
+import os
+import platform
+import re
+import shutil
+from typing import Dict, List, Optional
 
 import httpx
 
-from backend.models import Device
+from backend.models import Device, stable_device_id, utcnow
 
 logger = logging.getLogger(__name__)
 
-# OUI prefix → device type hints (first 8 chars of MAC, uppercase, colon-separated)
 OUI_TYPE_HINTS = {
-    # Raspberry Pi Foundation
     "B8:27:EB": "host", "DC:A6:32": "host", "E4:5F:01": "host",
-    # Espressif (ESP8266/ESP32)
     "24:0A:C4": "iot", "30:AE:A4": "iot", "84:F3:EB": "iot",
     "A4:CF:12": "iot", "EC:FA:BC": "iot", "94:B9:7E": "iot",
-    # Apple
     "00:17:F2": "host", "3C:15:C2": "host", "A8:86:DD": "host",
-    # Samsung
     "00:26:37": "tv", "8C:77:12": "tv", "F4:7B:5E": "tv",
-    # Sonos
     "00:0E:58": "media_server", "5C:AA:FD": "media_server",
-    # NVIDIA
     "00:04:4B": "game_console",
-    # Philips (Hue)
     "00:17:88": "smart_light",
-    # TP-Link
     "50:C7:BF": "router", "B0:4E:26": "router",
-    # Ubiquiti
     "00:15:6D": "ap", "04:18:D6": "ap", "78:8A:20": "ap",
-    # Netgear
     "00:14:6C": "router", "20:4E:7F": "router",
 }
 
@@ -70,45 +68,88 @@ MFR_TYPE_HINTS = {
     "tasmota": "iot",
 }
 
+_VENDOR_CACHE: Dict[str, str] = {}
+
+
+def _normalize_mac(mac: str) -> str:
+    compact = re.sub(r"[^0-9A-Fa-f]", "", mac)
+    if len(compact) != 12:
+        return mac.upper().replace("-", ":")
+    return ":".join(compact[i:i + 2] for i in range(0, 12, 2)).upper()
+
 
 def _oui_type(mac: str) -> Optional[str]:
-    prefix = mac.upper()[:8]
-    return OUI_TYPE_HINTS.get(prefix)
+    return OUI_TYPE_HINTS.get(_normalize_mac(mac)[:8])
 
 
 async def _lookup_mac_vendor(mac: str, timeout: float = 3.0) -> str:
-    """Query macvendors.com API for MAC OUI manufacturer."""
+    """Query macvendors.com. This is deliberately opt-in at scan level."""
+    mac = _normalize_mac(mac)
+    if mac in _VENDOR_CACHE:
+        return _VENDOR_CACHE[mac]
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.get(f"https://api.macvendors.com/{mac}")
             if resp.status_code == 200:
-                return resp.text.strip()
+                vendor = resp.text.strip()
+                _VENDOR_CACHE[mac] = vendor
+                return vendor
     except Exception as exc:
         logger.debug("MAC vendor lookup failed for %s: %s", mac, exc)
+    _VENDOR_CACHE.setdefault(mac, "")
     return ""
 
 
+def _parse_proc_arp(text: str) -> List[dict]:
+    entries: List[dict] = []
+    lines = text.splitlines()
+    for line in lines[1:]:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        ip, flags, mac = parts[0], parts[2], _normalize_mac(parts[3])
+        iface = parts[5] if len(parts) > 5 else ""
+        if mac != "00:00:00:00:00:00" and flags != "0x0":
+            entries.append({"ip": ip, "mac": mac, "iface": iface, "state": "reachable"})
+    return entries
+
+
 def _read_proc_arp() -> List[dict]:
-    """Parse /proc/net/arp for ARP table entries."""
-    entries = []
+    path = "/proc/net/arp"
+    if not os.path.exists(path):
+        return []
     try:
-        with open("/proc/net/arp") as f:
-            lines = f.readlines()
-        for line in lines[1:]:  # skip header
-            parts = line.split()
-            if len(parts) >= 4:
-                ip, hw_type, flags, mac = parts[0], parts[1], parts[2], parts[3]
-                iface = parts[5] if len(parts) > 5 else ""
-                if mac != "00:00:00:00:00:00" and flags != "0x0":
-                    entries.append({"ip": ip, "mac": mac.upper(), "iface": iface})
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            return _parse_proc_arp(handle.read())
     except Exception as exc:
         logger.warning("Could not read /proc/net/arp: %s", exc)
+        return []
+
+
+def _parse_ip_neigh(text: str) -> List[dict]:
+    entries: List[dict] = []
+    pattern = re.compile(
+        r"^(\S+)\s+dev\s+(\S+).*?\slladdr\s+([0-9a-fA-F:-]{17})\s+(\S+)\s*$"
+    )
+    for line in text.splitlines():
+        match = pattern.match(line.strip())
+        if not match:
+            continue
+        ip, iface, mac, state = match.groups()
+        if state.upper() in {"FAILED", "INCOMPLETE"}:
+            continue
+        entries.append({
+            "ip": ip,
+            "mac": _normalize_mac(mac),
+            "iface": iface,
+            "state": state.lower(),
+        })
     return entries
 
 
 async def _run_ip_neigh() -> List[dict]:
-    """Run `ip neigh show` for additional ARP/NDP entries."""
-    entries = []
+    if shutil.which("ip") is None:
+        return []
     try:
         proc = await asyncio.create_subprocess_exec(
             "ip", "neigh", "show",
@@ -116,77 +157,121 @@ async def _run_ip_neigh() -> List[dict]:
             stderr=asyncio.subprocess.DEVNULL,
         )
         stdout, _ = await proc.communicate()
-        for line in stdout.decode().splitlines():
-            # Format: 192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE
-            m = re.match(
-                r"(\S+)\s+dev\s+(\S+)\s+lladdr\s+([0-9a-fA-F:]{17})\s+(\S+)",
-                line
-            )
-            if m:
-                ip, iface, mac, state = m.groups()
-                if state not in ("FAILED", "INCOMPLETE"):
-                    entries.append({"ip": ip, "mac": mac.upper(), "iface": iface, "state": state})
+        return _parse_ip_neigh(stdout.decode(errors="replace"))
     except Exception as exc:
         logger.warning("ip neigh failed: %s", exc)
+        return []
+
+
+def _parse_windows_arp(text: str) -> List[dict]:
+    entries: List[dict] = []
+    interface = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        match = re.match(r"Interface:\s+(\S+)\s+---", line, re.IGNORECASE)
+        if match:
+            interface = match.group(1)
+            continue
+        match = re.match(
+            r"^(\d{1,3}(?:\.\d{1,3}){3})\s+([0-9A-Fa-f-]{17})\s+(dynamic|static)$",
+            line,
+            re.IGNORECASE,
+        )
+        if not match:
+            continue
+        ip, mac, state = match.groups()
+        entries.append({
+            "ip": ip,
+            "mac": _normalize_mac(mac),
+            "iface": interface,
+            "state": state.lower(),
+        })
     return entries
 
 
-async def scan_arp(lookup_vendors: bool = True) -> List[Device]:
-    """Scan ARP table and return Device list with MAC vendor info."""
-    # Merge proc/arp and ip neigh, dedup by IP
-    seen_ips = {}
-    for entry in _read_proc_arp():
-        seen_ips[entry["ip"]] = entry
-    for entry in await _run_ip_neigh():
-        if entry["ip"] not in seen_ips:
-            seen_ips[entry["ip"]] = entry
+async def _run_windows_arp() -> List[dict]:
+    if shutil.which("arp") is None:
+        return []
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "arp", "-a",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await proc.communicate()
+        return _parse_windows_arp(stdout.decode(errors="replace"))
+    except Exception as exc:
+        logger.warning("arp -a failed: %s", exc)
+        return []
 
-    # Vendor lookups (rate-limited — batch with small delay)
-    vendor_map = {}
+
+async def _neighbor_entries() -> List[dict]:
+    if platform.system().lower() == "windows":
+        return await _run_windows_arp()
+    entries = _read_proc_arp()
+    entries.extend(await _run_ip_neigh())
+    return entries
+
+
+def _classify(mac: str, vendor: str) -> str:
+    hinted = _oui_type(mac)
+    if hinted:
+        return hinted
+    vendor_l = vendor.lower()
+    for key, device_type in MFR_TYPE_HINTS.items():
+        if key in vendor_l:
+            return device_type
+    return "host"
+
+
+async def scan_arp(
+    lookup_vendors: bool = False,
+    vendor_delay: float = 0.5,
+) -> List[Device]:
+    """Read the local neighbor table and convert entries to canonical Device records."""
+    # Prefer a MAC identity so the same host does not become a new Device when its IP changes.
+    by_mac: Dict[str, dict] = {}
+    for entry in await _neighbor_entries():
+        mac = _normalize_mac(entry.get("mac", ""))
+        if not mac or mac == "00:00:00:00:00:00":
+            continue
+        current = by_mac.get(mac)
+        if current is None or current.get("state") == "stale":
+            normalized = dict(entry)
+            normalized["mac"] = mac
+            by_mac[mac] = normalized
+
+    vendor_map: Dict[str, str] = {}
     if lookup_vendors:
-        for i, (ip, entry) in enumerate(seen_ips.items()):
-            mac = entry["mac"]
-            if i > 0:
-                await asyncio.sleep(0.5)  # respect rate limit
-            vendor = await _lookup_mac_vendor(mac)
-            vendor_map[ip] = vendor
+        for index, mac in enumerate(by_mac):
+            if index and vendor_delay > 0:
+                await asyncio.sleep(vendor_delay)
+            vendor_map[mac] = await _lookup_mac_vendor(mac)
 
-    now = datetime.now(timezone.utc)
-    devices = []
-    for ip, entry in seen_ips.items():
-        mac = entry["mac"]
-        vendor = vendor_map.get(ip, "")
-
-        # Determine device type
-        dev_type = _oui_type(mac)
-        if not dev_type and vendor:
-            vl = vendor.lower()
-            for key, t in MFR_TYPE_HINTS.items():
-                if key in vl:
-                    dev_type = t
-                    break
-        if not dev_type:
-            dev_type = "host"
-
-        name = vendor if vendor else mac
-        dev = Device(
-            id=str(uuid.uuid5(uuid.NAMESPACE_OID, mac)),
-            name=f"{name} ({ip})",
-            device_type=dev_type,
+    now = utcnow()
+    devices: List[Device] = []
+    for mac, entry in by_mac.items():
+        ip = entry.get("ip") or None
+        interface = entry.get("iface") or None
+        vendor = vendor_map.get(mac, "")
+        device_type = _classify(mac, vendor)
+        name_base = vendor or mac
+        name = f"{name_base} ({ip})" if ip else name_base
+        devices.append(Device(
+            id=stable_device_id("arp", mac),
+            name=name,
+            device_type=device_type,
             address=ip,
-            port=None,
+            mac=mac,
             protocol="arp",
+            interface=interface,
+            manufacturer=vendor or None,
             properties={
-                "mac": mac,
-                "manufacturer": vendor,
-                "interface": entry.get("iface", ""),
                 "arp_state": entry.get("state", "reachable"),
+                "source": "neighbor_table",
             },
             online=True,
             first_seen=now,
             last_seen=now,
-        )
-        devices.append(dev)
-        logger.info("ARP found: %s [%s] %s (%s)", ip, mac, vendor, dev_type)
-
+        ))
     return devices

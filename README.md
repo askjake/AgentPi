@@ -46,7 +46,7 @@ Both platforms also include database backup/restore scripts and an `adopt-legacy
 
 ## Windows: fresh install
 
-Requirements: Windows 10/11, network access, and `winget` if Python 3.13 is not already installed.
+Requirements: Windows 10/11 and network access. If Python 3.13 is missing, the installer first tries a working `winget`; if `winget` is unavailable or its App Installer execution alias is broken, it downloads the official Python.org 3.13 x64 installer, verifies its SHA-256, and installs Python per-user without administrator rights.
 
 ```bat
 git clone --branch feature/agentpi-initial --single-branch https://github.com/askjake/AgentPi.git

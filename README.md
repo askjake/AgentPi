@@ -35,6 +35,15 @@ Later commits on the same branch add deployment hardening and self-install scrip
 | Windows portable PostgreSQL | `55432` |
 | Linux PostgreSQL | `5432` |
 
+## Supported deployment entry points
+
+| Platform | Fresh install | Update | Start / stop / verify |
+| --- | --- | --- | --- |
+| Windows | `deployment/windows/install.ps1` | `deployment/windows/update.ps1` | `start.ps1`, `stop.ps1`, `verify.ps1` |
+| Linux / Raspberry Pi OS | `deployment/linux/install.sh` | `deployment/linux/update.sh` | `start.sh`, `stop.sh`, `verify.sh` |
+
+Both platforms also include database backup/restore scripts and an `adopt-legacy` helper for migrating an older running installation into the repo-native layout.
+
 ## Windows: fresh install
 
 Requirements: Windows 10/11, network access, and `winget` if Python 3.13 is not already installed.

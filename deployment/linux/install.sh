@@ -27,11 +27,10 @@ install_packages() {
     if ! command -v python3.13 >/dev/null 2>&1; then
       run_root apt-get install -y python3.13 python3.13-venv python3.13-dev || true
     fi
-  elif command -v dnf >/dev/null 2>&1; then
-    run_root dnf install -y git curl openssl gcc gcc-c++ postgresql-server postgresql-contrib libpq-devel
-    if ! command -v python3.13 >/dev/null 2>&1; then
-      run_root dnf install -y python3.13 python3.13-devel || true
-    fi
+  else
+    echo "Automatic package installation supports apt-based Linux only." >&2
+    echo "Install Git, curl, OpenSSL, Python 3.13, PostgreSQL, build tools and libpq headers, then rerun." >&2
+    return 1
   fi
 }
 

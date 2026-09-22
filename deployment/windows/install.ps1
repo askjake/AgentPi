@@ -3,6 +3,7 @@ param(
     [string]$DefaultUserEmail = "local@localhost",
     [string]$PostgresBuild = "17.11-4",
     [switch]$NonInteractive,
+    [switch]$ResetCoverityAssistToken,
     [switch]$SkipTests,
     [switch]$NoStart
 )
@@ -59,7 +60,20 @@ if (-not (Test-Path $BackendEnv)) {
 }
 $currentEnv = Read-DotEnv $BackendEnv
 
-if ([string]::IsNullOrWhiteSpace($CoverityAssistToken)) {
+if ($ResetCoverityAssistToken) {
+    # Explicitly ignore an existing .env value. Prefer an explicitly supplied
+    # parameter, then a process environment value, otherwise prompt securely.
+    if ([string]::IsNullOrWhiteSpace($CoverityAssistToken)) {
+        if ($env:COVERITY_ASSIST_TOKEN) {
+            $CoverityAssistToken = $env:COVERITY_ASSIST_TOKEN
+        } elseif (-not $NonInteractive) {
+            $secure = Read-Host "New Coverity Assist token" -AsSecureString
+            $CoverityAssistToken = [Net.NetworkCredential]::new("", $secure).Password
+        } else {
+            throw "Reset requested but no COVERITY_ASSIST_TOKEN was supplied."
+        }
+    }
+} elseif ([string]::IsNullOrWhiteSpace($CoverityAssistToken)) {
     if ($currentEnv.ContainsKey("COVERITY_ASSIST_TOKEN") -and $currentEnv["COVERITY_ASSIST_TOKEN"]) {
         $CoverityAssistToken = $currentEnv["COVERITY_ASSIST_TOKEN"]
     } elseif ($env:COVERITY_ASSIST_TOKEN) {
@@ -301,14 +315,23 @@ max_connections = 100
 }
 
 # Required before the Journal migration.
+# Use a temporary SQL file instead of psql -c so native-command argument
+# parsing on Windows cannot remove the quotes around the hyphenated extension.
 $admin = Read-DotEnv $AdminEnv
 $db = Read-DotEnv $LocalDbEnv
+$uuidSql = Join-Path $Run "enable-uuid-ossp.sql"
+[IO.File]::WriteAllText(
+    $uuidSql,
+    'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";' + [Environment]::NewLine,
+    [Text.Encoding]::ASCII
+)
 $env:PGPASSWORD = $admin["POSTGRES_ADMIN_PWD"]
 try {
-    & (Join-Path $PgBin "psql.exe") -h 127.0.0.1 -p 55432 -U $admin["POSTGRES_ADMIN_USER"] -d $db["POSTGRES_DB"] -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'
+    & (Join-Path $PgBin "psql.exe") -h 127.0.0.1 -p 55432 -U $admin["POSTGRES_ADMIN_USER"] -d $db["POSTGRES_DB"] -v ON_ERROR_STOP=1 -f $uuidSql
     if ($LASTEXITCODE -ne 0) { throw "uuid-ossp setup failed." }
 } finally {
     Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $uuidSql -Force -ErrorAction SilentlyContinue
 }
 
 # Alembic migration using the private DB credentials as process environment.

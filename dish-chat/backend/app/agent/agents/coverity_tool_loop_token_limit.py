@@ -17,6 +17,9 @@ from app.core.llm.coverity_assist_chat_model import CoverityAssistChatModel
 from .host_context import build_host_context
 
 logger = logging.getLogger(__name__)
+SCRATCHPAD_LIMIT = 8_000   # PATCH-05
+SUMMARIZER_LIMIT = 16_000  # PATCH-05
+_COVERITY_LLM_TYPES = {"coverity-assist", "coverity-assist-tool-enabled"}  # PATCH-06
 
 
 @dataclass
@@ -201,7 +204,7 @@ def _render_tool_catalog(tools: list[NormalizedTool]) -> str:
 def _planner_model(model: Any) -> Any:
     """Use a smaller completion budget for the planner/summarizer loop."""
     try:
-        if getattr(model, "_llm_type", "") == "coverity-assist":
+        if getattr(model, "_llm_type", "") in {"coverity-assist", "coverity-assist-tool-enabled"}:  # PATCH-06
             cap = int(str(os.getenv("COVERITY_ASSIST_PLANNER_MAX_TOKENS", "2048")).replace("_", ""))
             return CoverityAssistChatModel(
                 endpoint_url=getattr(model, "endpoint_url"),
@@ -227,6 +230,15 @@ def _looks_like_network_request(user_text: str) -> bool:
     t = user_text.lower()
     return any(phrase in t for phrase in ["network devices", "local network", "list devices on the network", "show neighbors", "arp", "ip neigh"])
 
+
+
+def _is_mdns_specific(user_text: str) -> bool:
+    """PATCH-02: True when user explicitly wants mDNS — route to bridge, not shell."""
+    t = user_text.lower()
+    return any(p in t for p in [
+        "mdns", "avahi", "bonjour", ".local", "zeroconf",
+        "agentpi_discover", "discover_devices",
+    ])
 
 def _looks_like_host_health_request(user_text: str) -> bool:
     t = user_text.lower()
@@ -274,7 +286,8 @@ def _shell_cmd_for_files() -> str:
     return """bash -lc 'echo "PWD:"; pwd; echo; echo "Top-level files in /:"; ls -la /; echo; echo "Current dir listing:"; ls -la; echo; echo "Windows Desktop candidates:"; ls -la /mnt/c/Users/*/Desktop 2>/dev/null | head -n 200 || true'"""
 
 
-async def _search_harder(query: str, tool: Any, chat_id: Optional[str]) -> str:
+async def _search_harder(query: str, tool: Any, chat_id: Optional[str],
+                          fallback_tool: Any = None) -> str:  # PATCH-03
     queries = [query.strip()]
     q = query.lower().strip()
     if "super bowl" in q or "superbowl" in q:
@@ -287,23 +300,44 @@ async def _search_harder(query: str, tool: Any, chat_id: Optional[str]) -> str:
         queries.append(re.sub(r"\bwho won\b", "winner", query, flags=re.I))
     elif "today" in q or "latest" in q or "current" in q:
         queries.append(query + " latest")
-    seen = set()
-    outputs = []
+    seen: set = set()
+    network_dead = False
+
     for qx in queries:
         qx = qx.strip()
         if not qx or qx in seen:
             continue
         seen.add(qx)
+        if network_dead:  # PATCH-03: skip remaining variants on dead network
+            break
         try:
             result = await _invoke_tool(tool, qx, chat_id=chat_id)
         except Exception as exc:
-            outputs.append(f"Query: {qx}\nError: {exc}")
-            continue
+            err = str(exc).lower()
+            if any(k in err for k in ["connection", "timeout", "network", "unreachable", "refused", "name or service"]):
+                network_dead = True
+                logger.warning("[SEARCH] network dead, short-circuiting after 1 attempt: %s", exc)
+                break
+            return f"Query: {qx}\nError: {exc}"
         text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
-        outputs.append(f"Query: {qx}\n{text}")
         if re.search(r'("results"\s*:\s*\[[^\]]+\]|https?://|winner|won|score|date)', text, re.I):
-            break
-    return "\n\n".join(outputs)
+            return f"Query: {qx}\n{text}"
+
+    # PATCH-03: fallback to internal_search before giving up
+    if network_dead and fallback_tool is not None:
+        try:
+            fb = await _invoke_tool(fallback_tool, query, chat_id=chat_id)
+            fb_text = fb if isinstance(fb, str) else json.dumps(fb, ensure_ascii=False, default=str)
+            if fb_text.strip():
+                return f"[Web search unavailable — using internal search]\n\n{fb_text}"
+        except Exception as fb_e:
+            logger.warning("[SEARCH] internal_search fallback failed: %s", fb_e)
+
+    if network_dead:
+        return ("Web search unavailable — Pi cannot reach the internet from this network. "
+                "Try internal_search or check connectivity.")
+
+    return "No search results found after all query variants."
 
 
 async def _maybe_handle_obvious_direct_task(user_text: str, tool_map: dict[str, NormalizedTool], chat_id: Optional[str]) -> Optional[str]:
@@ -314,9 +348,18 @@ async def _maybe_handle_obvious_direct_task(user_text: str, tool_map: dict[str, 
     if _looks_like_video_request(user_text) and "agent_run_shell" in tool_map:
         return await _invoke_tool(tool_map["agent_run_shell"].raw, {"command": _shell_cmd_for_video(), "cwd": "/tmp", "timeout_seconds": 240}, chat_id=chat_id)
     if _looks_like_fresh_info_request(user_text) and "public_web_search" in tool_map:
-        return await _search_harder(user_text, tool_map["public_web_search"].raw, chat_id)
+        return await _search_harder(
+            user_text, tool_map["public_web_search"].raw, chat_id,
+            fallback_tool=tool_map["internal_search"].raw if "internal_search" in tool_map else None,
+        )  # PATCH-03
     if _looks_like_network_request(user_text) and "agent_run_shell" in tool_map:
-        return await _invoke_tool(tool_map["agent_run_shell"].raw, {"command": _shell_cmd_for_network(), "cwd": "/tmp", "timeout_seconds": 120}, chat_id=chat_id)
+        # PATCH-02: mDNS requests fall through to planner so agentpi_discover_devices is used
+        if "agentpi_discover_devices" in tool_map and _is_mdns_specific(user_text):
+            logger.info("[FAST-PATH] mDNS + bridge available — routing to planner")
+        else:
+            return await _invoke_tool(tool_map["agent_run_shell"].raw,
+                {"command": _shell_cmd_for_network(), "cwd": "/tmp", "timeout_seconds": 120},
+                chat_id=chat_id)
     if _looks_like_host_health_request(user_text) and "agent_run_shell" in tool_map:
         return await _invoke_tool(tool_map["agent_run_shell"].raw, {"command": _shell_cmd_for_host_health(), "cwd": "/tmp", "timeout_seconds": 180}, chat_id=chat_id)
     if _looks_like_file_request(user_text) and "agent_run_shell" in tool_map:
@@ -366,7 +409,7 @@ async def _summarize_tool_result(model: Any, user_text: str, result_text: str, c
         "Do not invent results. If the output is partial or inconclusive, say so. "
         "If the user asked for analysis of a path or repository, infer structure and intended functions only from the provided file listings/output, and state when deeper file reads would be needed.\n\n"
         f"User request:\n{user_text}\n\n"
-        f"Tool output:\n{result_text[:16000]}"
+        f"Tool output:\n{result_text[:SUMMARIZER_LIMIT]}"
     )
     logger.info("Planner summary prompt chars=%d", len(prompt))
     response = await model.ainvoke([HumanMessage(content=prompt)], config=config)
@@ -431,7 +474,14 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
                 result = json.dumps(result, ensure_ascii=False, default=str)
             except Exception:
                 result = str(result)
-        scratchpad.append(f"Tool used: {selected.name}\nInput: {tool_input}\nResult: {result[:8000]}")
+        # PATCH-05: truncation-aware append
+        _ol = len(result)
+        _b  = result[:SCRATCHPAD_LIMIT]
+        _mk = (f"\n[TRUNCATED: showed {SCRATCHPAD_LIMIT:,} of {_ol:,} chars — use a narrower query for more.]"
+               if _ol > SCRATCHPAD_LIMIT else "")
+        if _mk:
+            logger.warning("[SCRATCHPAD] tool=%s truncated %d->%d chars", selected.name, _ol, SCRATCHPAD_LIMIT)
+        scratchpad.append(f"Tool used: {selected.name}\nInput: {tool_input}\nResult: {_b}{_mk}")
 
     if scratchpad:
         grounded = await _summarize_tool_result(model, user_text, "\n\n".join(scratchpad), config=config)

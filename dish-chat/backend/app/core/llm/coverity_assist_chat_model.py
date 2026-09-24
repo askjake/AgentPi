@@ -118,7 +118,13 @@ class CoverityAssistChatModel(BaseChatModel):
 
     @property
     def _llm_type(self) -> str:
+        # PATCH-06: _COVERITY_LLM_TYPES in tool loop matches both values
         return "coverity-assist-tool-enabled"
+
+    @property
+    def _llm_type_base(self) -> str:
+        """Defensive alias for callers that check the base string (PATCH-06)."""
+        return "coverity-assist"
 
     @property
     def _identifying_params(self) -> dict[str, Any]:

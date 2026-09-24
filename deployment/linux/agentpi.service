@@ -1,0 +1,20 @@
+[Unit]
+Description=AgentPi REST Backend
+Documentation=https://github.com/askjake/AgentPi
+After=network-online.target dishchat-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentpi001
+WorkingDirectory=/home/agentpi001/AgentPi
+Environment=AGENTPI_HOST=127.0.0.1
+Environment=AGENTPI_PORT=8765
+ExecStart=/home/agentpi001/AgentPi/.venv/bin/python -m backend
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/agentpi001/AgentPi/runtime/logs/agentpi.out.log
+StandardError=append:/home/agentpi001/AgentPi/runtime/logs/agentpi.err.log
+
+[Install]
+WantedBy=multi-user.target

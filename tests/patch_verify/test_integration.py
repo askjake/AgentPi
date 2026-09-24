@@ -164,6 +164,23 @@ def test_patch08():
 
 check("PATCH-08 SQLite store structure", test_patch08)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PATCH-04 registry count: 18 original + 5 new = 23 total
+# ─────────────────────────────────────────────────────────────────────────────
+def test_registry_count():
+    import re
+    src = pathlib.Path(PATCH + "/dish-chat/backend/app/agent/agents/tools/registry.py").read_text()
+    m = re.search(r'"agent_mode":\s*lambda:\s*\[(.*?)\]', src, re.S)
+    assert m, "FAIL: agent_mode lambda not found"
+    names = re.findall(r'\b(agentpi_\w+|agent_\w+)\b', m.group(1))
+    assert len(names) >= 23, f"FAIL: {len(names)} tools (want >=23)"
+    new = {"agentpi_mqtt_start","agentpi_mqtt_stop","agentpi_homeassistant_start",
+           "agentpi_homeassistant_stop","agentpi_clear_inventory"}
+    assert not (new - set(names)), f"FAIL: missing {new - set(names)}"
+
+check("PATCH-04 registry: 23 tools, all 5 new tools present", test_registry_count)
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Result summary
 # ─────────────────────────────────────────────────────────────────────────────

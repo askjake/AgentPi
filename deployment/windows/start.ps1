@@ -19,8 +19,56 @@ $env:PYTHONIOENCODING = "utf-8"
 $env:DISHCHAT_FRONTEND_HOST = "0.0.0.0"
 $env:DISHCHAT_FRONTEND_PORT = "3000"
 $env:AGENTPI_HOST = "127.0.0.1"
-$env:AGENTPI_PORT = "8765"
 $env:AGENTPI_DB = Join-Path $Run "agentpi-devices.db"
+
+function Test-LoopbackPortBindable([int]$Port) {
+    $listener = $null
+    try {
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $Port)
+        $listener.Start()
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($listener) {
+            try { $listener.Stop() } catch {}
+        }
+    }
+}
+
+$AgentPiPortFile = Join-Path $Run "agentpi-port.txt"
+$AgentPiPort = $null
+
+# Prefer a previously selected port when it is already serving a healthy AgentPi.
+if (Test-Path $AgentPiPortFile) {
+    $saved = (Get-Content -LiteralPath $AgentPiPortFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    $savedPort = 0
+    if ([int]::TryParse("$saved", [ref]$savedPort) -and $savedPort -gt 0 -and $savedPort -lt 65536) {
+        try {
+            $r = Invoke-WebRequest -UseBasicParsing -Uri ("http://127.0.0.1:{0}/rest/api/v1/health" -f $savedPort) -TimeoutSec 2
+            if ($r.StatusCode -eq 200) { $AgentPiPort = $savedPort }
+        } catch {}
+    }
+}
+
+# Windows may reserve 8765 (WinError 10013). Probe it first, then deterministic fallbacks.
+if (-not $AgentPiPort) {
+    foreach ($candidate in @(8765, 18765, 28765, 38765, 48765)) {
+        if (Test-LoopbackPortBindable $candidate) {
+            $AgentPiPort = $candidate
+            break
+        }
+    }
+}
+
+if (-not $AgentPiPort) {
+    throw "No usable loopback port found for AgentPi (tried 8765,18765,28765,38765,48765)."
+}
+
+$env:AGENTPI_PORT = "$AgentPiPort"
+$env:AGENTPI_URL = "http://127.0.0.1:$AgentPiPort"
+Set-Content -LiteralPath $AgentPiPortFile -Value $AgentPiPort -Encoding ASCII
+Write-Host "AgentPi endpoint: $($env:AGENTPI_URL)"
 
 $AgentPy = Join-Path $Root ".venv-windows\Scripts\python.exe"
 $DishPy = Join-Path $Root "dish-chat\backend\.venv-windows\Scripts\python.exe"
@@ -81,9 +129,10 @@ function Start-ManagedProcess(
     Write-Host "$Name PID: $($p.Id)"
 }
 
-if (-not (Is-Healthy "http://127.0.0.1:8765/rest/api/v1/health")) {
+$AgentPiHealthUrl = "$($env:AGENTPI_URL)/rest/api/v1/health"
+if (-not (Is-Healthy $AgentPiHealthUrl)) {
     Start-ManagedProcess "agentpi" $AgentPy @("-m","backend") $Root
-} else { Write-Host "Reusing healthy AgentPi on :8765" }
+} else { Write-Host "Reusing healthy AgentPi on :$AgentPiPort" }
 
 if (-not (Is-Healthy "http://127.0.0.1:8000/rest/api/v1/health")) {
     Start-ManagedProcess "dishchat-backend" $DishPy @($Runner) $Root
@@ -94,7 +143,7 @@ if (-not (Is-Healthy "http://127.0.0.1:3000/health")) {
 } else { Write-Host "Reusing healthy DishChat frontend on :3000" }
 
 $ok = $true
-$ok = (Wait-Http "AgentPi" "http://127.0.0.1:8765/rest/api/v1/health" 15) -and $ok
+$ok = (Wait-Http "AgentPi" $AgentPiHealthUrl 15) -and $ok
 $ok = (Wait-Http "DishChat backend" "http://127.0.0.1:8000/rest/api/v1/health" 40) -and $ok
 $ok = (Wait-Http "DishChat frontend" "http://127.0.0.1:3000/health" 20) -and $ok
 if (-not $ok) {

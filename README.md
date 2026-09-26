@@ -31,7 +31,7 @@ Later commits on the same branch add deployment hardening and self-install scrip
 | --- | --- |
 | DishChat frontend | `0.0.0.0:3000` |
 | DishChat backend | `0.0.0.0:8000` |
-| AgentPi sidecar | `127.0.0.1:8765` |
+| AgentPi sidecar | loopback `8765` preferred; automatic fallback on Windows |
 | Windows portable PostgreSQL | `127.0.0.1:55432` |
 | Linux PostgreSQL | `5432` |
 
@@ -109,6 +109,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\deployment\windows\restor
 ```
 
 Windows runtime secrets and the portable PostgreSQL data directory live under ignored `.env` / `runtime` paths and are not committed.
+
+Windows may reserve port `8765` through its excluded TCP port mechanism. The launcher probes `8765` first and automatically falls back to `18765`, `28765`, `38765`, or `48765` if needed. The selected port is saved in `runtime\agentpi-port.txt`; DishChat and `verify.ps1` read the same endpoint automatically.
 
 ## Linux: fresh install
 

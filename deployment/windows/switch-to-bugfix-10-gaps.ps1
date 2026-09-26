@@ -1,6 +1,6 @@
 param(
     [string]$TargetBranch = "feature/bugfix-10-gaps",
-    [string]$ExpectedSha = "538db536edf6629b7061e9368334733292fe866a",
+    [string]$RequiredAncestor = "538db536edf6629b7061e9368334733292fe866a",
     [switch]$StartAndVerify
 )
 
@@ -38,8 +38,11 @@ try {
     if ($LASTEXITCODE -ne 0 -or -not $remoteSha) { throw "Cannot resolve $remoteRef" }
     Write-Host "Remote SHA: $remoteSha"
 
-    if ($ExpectedSha -and $remoteSha -ne $ExpectedSha) {
-        throw "Remote branch moved: expected $ExpectedSha but found $remoteSha. Refusing an unreviewed target."
+    if ($RequiredAncestor) {
+        & git merge-base --is-ancestor $RequiredAncestor $remoteRef
+        if ($LASTEXITCODE -ne 0) {
+            throw "Target $remoteRef is not a descendant of required baseline $RequiredAncestor."
+        }
     }
 
     # This intentionally discards tracked working-tree line-ending noise only.
@@ -56,7 +59,7 @@ try {
     Write-Host "Current SHA:    $head"
 
     if ($branch -ne $TargetBranch) { throw "Wrong branch after checkout: $branch" }
-    if ($ExpectedSha -and $head -ne $ExpectedSha) { throw "Wrong HEAD after checkout: $head" }
+    if ($head -ne $remoteSha) { throw "Wrong HEAD after checkout: expected $remoteSha but found $head" }
 
     Write-Host "Tracked status:"
     & git status --short --branch

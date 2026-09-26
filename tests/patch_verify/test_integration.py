@@ -193,6 +193,21 @@ def test_patch08():
 check("PATCH-08 SQLite store structure + cross-platform persistence path", test_patch08)
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Windows runtime: reserved-port fallback contract
+# ─────────────────────────────────────────────────────────────────────────────
+def test_windows_agentpi_port_fallback():
+    start = pathlib.Path(os.path.join(REPO, "deployment/windows/start.ps1")).read_text()
+    runner = pathlib.Path(os.path.join(REPO, "deployment/windows/run_dishchat_backend.py")).read_text()
+    verify = pathlib.Path(os.path.join(REPO, "deployment/windows/verify.ps1")).read_text()
+    assert "agentpi-port.txt" in start, "selected AgentPi port marker missing"
+    assert "18765" in start and "28765" in start, "fallback port candidates missing"
+    assert "Test-LoopbackPortBindable" in start, "bind probe missing"
+    assert 'os.environ.get("AGENTPI_URL"' in runner, "DishChat runner ignores selected AgentPi URL"
+    assert "agentpi-port.txt" in verify, "verifier does not read selected AgentPi port"
+
+check("Windows AgentPi port fallback contract", test_windows_agentpi_port_fallback)
+
+# ─────────────────────────────────────────────────────────────────────────────
 print()
 print("=" * 56)
 print(f"  RESULTS: {len(PASS)} passed, {len(FAIL)} failed")

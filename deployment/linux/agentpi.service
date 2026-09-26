@@ -7,9 +7,12 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=agentpi001
+StateDirectory=agentpi
+StateDirectoryMode=0750
 WorkingDirectory=/home/agentpi001/AgentPi
 Environment=AGENTPI_HOST=127.0.0.1
 Environment=AGENTPI_PORT=8765
+Environment=AGENTPI_DB=/var/lib/agentpi/devices.db
 ExecStart=/home/agentpi001/AgentPi/.venv/bin/python -m backend
 Restart=on-failure
 RestartSec=5

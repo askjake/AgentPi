@@ -180,8 +180,17 @@ def test_patch08():
     assert "DeviceInventory" in src, "DeviceInventory class missing"
     assert "upsert_many"     in src, "upsert_many missing"
     assert "AGENTPI_DB"      in src, "AGENTPI_DB env var missing"
+    assert '"runtime" / "agentpi-devices.db"' in src, "portable repo-runtime default missing"
+    assert '"/var/lib/agentpi/devices.db"' not in src, "non-portable hardcoded default remains"
 
-check("PATCH-08 SQLite store structure", test_patch08)
+    win = pathlib.Path(os.path.join(REPO, "deployment/windows/start.ps1")).read_text()
+    assert "AGENTPI_DB" in win and "agentpi-devices.db" in win, "Windows AGENTPI_DB runtime override missing"
+
+    svc = pathlib.Path(os.path.join(REPO, "deployment/linux/agentpi.service")).read_text()
+    assert "StateDirectory=agentpi" in svc, "systemd StateDirectory missing"
+    assert "Environment=AGENTPI_DB=/var/lib/agentpi/devices.db" in svc, "systemd AGENTPI_DB override missing"
+
+check("PATCH-08 SQLite store structure + cross-platform persistence path", test_patch08)
 
 # ─────────────────────────────────────────────────────────────────────────────
 print()

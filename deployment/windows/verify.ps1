@@ -2,9 +2,20 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "lib.ps1")
 $Root = Get-AgentPiRepoRoot
 $Run = Join-Path $Root "runtime"
+$AgentPiPortFile = Join-Path $Run "agentpi-port.txt"
+$AgentPiPort = 8765
+if (Test-Path $AgentPiPortFile) {
+    $saved = (Get-Content -LiteralPath $AgentPiPortFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+    $parsed = 0
+    if ([int]::TryParse("$saved", [ref]$parsed) -and $parsed -gt 0 -and $parsed -lt 65536) {
+        $AgentPiPort = $parsed
+    }
+}
+$AgentPiHealthUrl = "http://127.0.0.1:$AgentPiPort/rest/api/v1/health"
+Write-Host "AgentPi verify endpoint: http://127.0.0.1:$AgentPiPort"
 
 $ok = $true
-$ok = (Wait-Http "AgentPi" "http://127.0.0.1:8765/rest/api/v1/health" 3) -and $ok
+$ok = (Wait-Http "AgentPi" $AgentPiHealthUrl 3) -and $ok
 $ok = (Wait-Http "DishChat backend" "http://127.0.0.1:8000/rest/api/v1/health" 3) -and $ok
 $ok = (Wait-Http "DishChat frontend" "http://127.0.0.1:3000/health" 3) -and $ok
 

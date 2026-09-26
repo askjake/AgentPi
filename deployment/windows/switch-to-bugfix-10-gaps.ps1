@@ -1,4 +1,5 @@
 param(
+    [string]$RepoRoot = "",
     [string]$TargetBranch = "feature/bugfix-10-gaps",
     [string]$RequiredAncestor = "538db536edf6629b7061e9368334733292fe866a",
     [switch]$StartAndVerify
@@ -7,7 +8,11 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
+    $Root = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
+} else {
+    $Root = (Resolve-Path $RepoRoot).Path
+}
 Push-Location $Root
 try {
     Write-Host "=== AgentPi branch recovery/switch ==="

@@ -20,6 +20,7 @@ $env:DISHCHAT_FRONTEND_HOST = "0.0.0.0"
 $env:DISHCHAT_FRONTEND_PORT = "3000"
 $env:AGENTPI_HOST = "127.0.0.1"
 $env:AGENTPI_PORT = "8765"
+$env:AGENTPI_DB = Join-Path $Run "agentpi-devices.db"
 
 $AgentPy = Join-Path $Root ".venv-windows\Scripts\python.exe"
 $DishPy = Join-Path $Root "dish-chat\backend\.venv-windows\Scripts\python.exe"
@@ -97,8 +98,16 @@ $ok = (Wait-Http "AgentPi" "http://127.0.0.1:8765/rest/api/v1/health" 15) -and $
 $ok = (Wait-Http "DishChat backend" "http://127.0.0.1:8000/rest/api/v1/health" 40) -and $ok
 $ok = (Wait-Http "DishChat frontend" "http://127.0.0.1:3000/health" 20) -and $ok
 if (-not $ok) {
-    $err = Join-Path $Logs "dishchat-backend.err.log"
-    if (Test-Path $err) { Get-Content $err -Tail 120 }
+    $agentErr = Join-Path $Logs "agentpi.err.log"
+    $backendErr = Join-Path $Logs "dishchat-backend.err.log"
+    if (Test-Path $agentErr) {
+        Write-Host "----- AgentPi stderr (tail) -----"
+        Get-Content $agentErr -Tail 120
+    }
+    if (Test-Path $backendErr) {
+        Write-Host "----- DishChat backend stderr (tail) -----"
+        Get-Content $backendErr -Tail 120
+    }
     throw "One or more services failed health checks."
 }
 

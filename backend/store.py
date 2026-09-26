@@ -6,7 +6,13 @@ from typing import Dict, Iterable, List, Optional
 from backend.models import Device
 
 def _db_path() -> Path:
-    return Path(os.environ.get("AGENTPI_DB", "/var/lib/agentpi/devices.db"))
+    configured = os.environ.get("AGENTPI_DB")
+    if configured:
+        return Path(configured).expanduser()
+    # Repo-native portable default. Windows/non-root installs cannot safely
+    # create /var/lib/agentpi; Linux systemd may override AGENTPI_DB explicitly.
+    repo_root = Path(__file__).resolve().parents[1]
+    return repo_root / "runtime" / "agentpi-devices.db"
 
 def _to_row(d: Device) -> tuple:
     return (d.id, json.dumps(d.to_dict()), time.time())
@@ -26,8 +32,8 @@ def _from_row(row) -> Device:
 class DeviceInventory:
     """SQLite-backed device inventory (PATCH-08).
     Drop-in replacement for the previous in-memory dict.
-    Persists across reboots. DB path: AGENTPI_DB env var
-    (default /var/lib/agentpi/devices.db).
+    Persists across reboots. DB path: AGENTPI_DB env var.
+    Portable default: <repo>/runtime/agentpi-devices.db.
     """
     def __init__(self) -> None:
         p = _db_path()

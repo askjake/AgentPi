@@ -90,8 +90,18 @@ try {
         & $verify
         if ($LASTEXITCODE -ne 0) { throw "Stack verification failed" }
 
+        $agentPiPort = 8765
+        $agentPiPortFile = Join-Path $Root "runtime\agentpi-port.txt"
+        if (Test-Path $agentPiPortFile) {
+            $saved = (Get-Content -LiteralPath $agentPiPortFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+            $parsed = 0
+            if ([int]::TryParse("$saved", [ref]$parsed) -and $parsed -gt 0 -and $parsed -lt 65536) {
+                $agentPiPort = $parsed
+            }
+        }
+
         foreach ($url in @(
-            "http://127.0.0.1:8765/rest/api/v1/health",
+            ("http://127.0.0.1:{0}/rest/api/v1/health" -f $agentPiPort),
             "http://127.0.0.1:8000/rest/api/v1/health",
             "http://127.0.0.1:3000/health"
         )) {
@@ -102,7 +112,7 @@ try {
 
         Write-Host "Listening endpoints:"
         Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-            Where-Object { $_.LocalPort -in 8765,8000,3000 } |
+            Where-Object { $_.LocalPort -in @($agentPiPort,8000,3000) } |
             Sort-Object LocalPort |
             Format-Table LocalAddress,LocalPort,State,OwningProcess -AutoSize
 

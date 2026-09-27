@@ -176,6 +176,18 @@ def test_prefixed_multiline_json_dispatches_once(planner):
     '{"action":"tool","tool":"x","input":{}} {"action":"final","final":"also"}',
     '{"wrapper":{"action":"tool","tool":"x","input":{}}}',
     '{"action":"tool","tool":"x","input":{"code":"' + ('x' * 66_000),
+], ids=[
+    # Pytest includes the node ID in PYTEST_CURRENT_TEST. Keep payloads out of
+    # IDs: Windows rejects an environment-variable value above 32,767 chars.
+    "truncated-code",
+    "duplicate-action",
+    "null-input",
+    "missing-input",
+    "empty-final",
+    "top-level-array",
+    "multiple-actions",
+    "nested-action",
+    "oversized-payload",
 ])
 def test_malformed_or_ambiguous_actions_are_not_dispatched(planner, text):
     assert planner._pick_action_payload(text) is None
@@ -271,3 +283,19 @@ def test_final_can_contain_data_json_not_tool_directives(planner):
 
 def test_nonfinite_json_input_is_rejected(planner):
     assert planner._pick_action_payload('{"action":"tool","tool":"x","input":{"value":NaN}}') is None
+
+
+def test_action_case_ids_are_bounded_without_reducing_payloads():
+    """Test data stays large; collection metadata must remain small on Windows."""
+    marks = test_malformed_or_ambiguous_actions_are_not_dispatched.pytestmark
+    parametrizations = [mark for mark in marks if mark.name == "parametrize"]
+    assert len(parametrizations) == 1
+    mark = parametrizations[0]
+    payloads = mark.args[1]
+    ids = mark.kwargs.get("ids", [])
+    assert len(ids) == len(payloads) == 9
+    assert len(set(ids)) == len(ids)
+    assert all(isinstance(case_id, str) and case_id.isascii() and 0 < len(case_id) <= 64 for case_id in ids)
+    oversized = payloads[ids.index("oversized-payload")]
+    assert oversized == '{"action":"tool","tool":"x","input":{"code":"' + ('x' * 66_000)
+    assert len(oversized) > 65_536  # Still exercises the production size guard.

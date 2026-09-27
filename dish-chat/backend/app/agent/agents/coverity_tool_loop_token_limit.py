@@ -228,7 +228,16 @@ def _looks_like_fresh_info_request(user_text: str) -> bool:
 
 def _looks_like_network_request(user_text: str) -> bool:
     t = user_text.lower()
-    return any(phrase in t for phrase in ["network devices", "local network", "list devices on the network", "show neighbors", "arp", "ip neigh"])
+    explicit = any(phrase in t for phrase in [
+        "network devices", "local network", "network scan", "scan my network",
+        "scan the network", "map my network", "map the network", "network map",
+        "list devices on the network", "discover devices", "find devices",
+        "show neighbors", "arp", "ip neigh",
+    ])
+    intent = ("network" in t or "lan" in t) and any(
+        word in t for word in ["scan", "map", "discover", "find", "device", "host", "neighbor"]
+    )
+    return explicit or intent
 
 
 
@@ -334,7 +343,7 @@ async def _search_harder(query: str, tool: Any, chat_id: Optional[str],
             logger.warning("[SEARCH] internal_search fallback failed: %s", fb_e)
 
     if network_dead:
-        return ("Web search unavailable — Pi cannot reach the internet from this network. "
+        return ("Web search unavailable — this host cannot reach the internet from this network. "
                 "Try internal_search or check connectivity.")
 
     return "No search results found after all query variants."
@@ -352,14 +361,40 @@ async def _maybe_handle_obvious_direct_task(user_text: str, tool_map: dict[str, 
             user_text, tool_map["public_web_search"].raw, chat_id,
             fallback_tool=tool_map["internal_search"].raw if "internal_search" in tool_map else None,
         )  # PATCH-03
-    if _looks_like_network_request(user_text) and "agent_run_shell" in tool_map:
-        # PATCH-02: mDNS requests fall through to planner so agentpi_discover_devices is used
-        if "agentpi_discover_devices" in tool_map and _is_mdns_specific(user_text):
-            logger.info("[FAST-PATH] mDNS + bridge available — routing to planner")
-        else:
-            return await _invoke_tool(tool_map["agent_run_shell"].raw,
+    if _looks_like_network_request(user_text):
+        # Network discovery is a first-class AgentPi capability. Prefer it on
+        # every OS instead of translating the request into platform-specific
+        # shell commands (nmap/ip/ipconfig/etc.).
+        if "agentpi_discover_devices" in tool_map:
+            logger.info("[FAST-PATH] network mapping -> AgentPi active ARP + mDNS")
+            discovered = await _invoke_tool(
+                tool_map["agentpi_discover_devices"].raw,
+                {
+                    "arp": True,
+                    "mdns": True,
+                    "mdns_timeout": 3.0,
+                    "active": True,
+                    "active_max_hosts": 768,
+                },
+                chat_id=chat_id,
+            )
+            parts = ["Active AgentPi discovery:\n" + str(discovered)]
+            if "agentpi_list_devices" in tool_map:
+                inventory = await _invoke_tool(
+                    tool_map["agentpi_list_devices"].raw,
+                    {},
+                    chat_id=chat_id,
+                )
+                parts.append("Persisted AgentPi inventory:\n" + str(inventory))
+            return "\n\n".join(parts)
+
+        # Last resort for older deployments where the AgentPi bridge is absent.
+        if "agent_run_shell" in tool_map:
+            return await _invoke_tool(
+                tool_map["agent_run_shell"].raw,
                 {"command": _shell_cmd_for_network(), "cwd": "/tmp", "timeout_seconds": 120},
-                chat_id=chat_id)
+                chat_id=chat_id,
+            )
     if _looks_like_host_health_request(user_text) and "agent_run_shell" in tool_map:
         return await _invoke_tool(tool_map["agent_run_shell"].raw, {"command": _shell_cmd_for_host_health(), "cwd": "/tmp", "timeout_seconds": 180}, chat_id=chat_id)
     if _looks_like_file_request(user_text) and "agent_run_shell" in tool_map:
@@ -380,11 +415,12 @@ def _build_planner_prompt(user_text: str, recent_transcript: str, system_text: s
         host_context,
         "",
         "Routing rules:",
-        "1. For host files, processes, VLC, capture cards, cameras, peripherals, Windows host questions, and bash commands, prefer agent_run_shell.",
-        "2. For a literal path like /mnt/c/... inspect THAT path directly with shell tools instead of cloning anything.",
-        "3. For fresh/current facts, use public_web_search and retry with tighter queries before saying you could not find it.",
-        "4. Use the recent transcript for follow-ups like 'do it again'.",
-        "5. If a tool is needed, respond with JSON ONLY and nothing else.",
+        "1. For local/LAN network discovery or mapping, ALWAYS prefer agentpi_discover_devices and agentpi_list_devices. Do not use nmap/ip/ipconfig/arp shell commands unless the AgentPi bridge is unavailable.",
+        "2. For host files, processes, VLC, capture cards, cameras, peripherals, or an explicitly requested shell command, use agent_run_shell with commands appropriate for the detected OS.",
+        "3. For a literal path like /mnt/c/... inspect THAT path directly with shell tools instead of cloning anything.",
+        "4. For fresh/current facts, use public_web_search and retry with tighter queries before saying you could not find it.",
+        "5. Use the recent transcript for follow-ups like 'do it again'.",
+        "6. If a tool is needed, respond with JSON ONLY and nothing else.",
         '{"action":"tool","tool":"TOOL_NAME","input":"TEXT_OR_JSON"}',
         '{"action":"final","final":"YOUR FINAL ANSWER"}',
         "",

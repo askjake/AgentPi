@@ -249,6 +249,43 @@ def _is_mdns_specific(user_text: str) -> bool:
         "agentpi_discover", "discover_devices",
     ])
 
+def _extract_ipv4_address(user_text: str) -> Optional[str]:
+    match = re.search(r"(?<!\d)(?:\d{1,3}\.){3}\d{1,3}(?!\d)", user_text)
+    if not match:
+        return None
+    candidate = match.group(0)
+    try:
+        if all(0 <= int(part) <= 255 for part in candidate.split(".")):
+            return candidate
+    except ValueError:
+        return None
+    return None
+
+
+def _extract_requested_port(user_text: str) -> Optional[int]:
+    patterns = [
+        r"\bport\s*[:=#-]?\s*(\d{1,5})\b",
+        r"(?<!\d):(\d{1,5})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, user_text, re.I)
+        if match:
+            port = int(match.group(1))
+            if 1 <= port <= 65535:
+                return port
+    return None
+
+
+def _looks_like_device_probe_request(user_text: str) -> bool:
+    t = user_text.lower()
+    return _extract_ipv4_address(user_text) is not None and any(
+        phrase in t for phrase in [
+            "probe", "check", "test", "connect", "connectivity",
+            "port", "is it open", "reachable", "ping",
+        ]
+    )
+
+
 def _looks_like_host_health_request(user_text: str) -> bool:
     t = user_text.lower()
     return any(phrase in t for phrase in ["host machine", "diagnose its overall health", "diagnose host", "system health", "machine health", "server health"])
@@ -350,6 +387,21 @@ async def _search_harder(query: str, tool: Any, chat_id: Optional[str],
 
 
 async def _maybe_handle_obvious_direct_task(user_text: str, tool_map: dict[str, NormalizedTool], chat_id: Optional[str]) -> Optional[str]:
+    if _looks_like_device_probe_request(user_text) and "agent_check_device" in tool_map:
+        ip_address = _extract_ipv4_address(user_text)
+        port = _extract_requested_port(user_text)
+        payload = {
+            "ip_address": ip_address,
+            "check_type": "port" if port else "ping",
+        }
+        if port:
+            payload["port"] = port
+        logger.info("[FAST-PATH] specific device probe -> agent_check_device %s", payload)
+        return await _invoke_tool(
+            tool_map["agent_check_device"].raw,
+            payload,
+            chat_id=chat_id,
+        )
     if _looks_like_repo_or_path_request(user_text) and "agent_run_shell" in tool_map:
         path = _extract_path(user_text)
         if path:
@@ -416,11 +468,13 @@ def _build_planner_prompt(user_text: str, recent_transcript: str, system_text: s
         "",
         "Routing rules:",
         "1. For local/LAN network discovery or mapping, ALWAYS prefer agentpi_discover_devices and agentpi_list_devices. Do not use nmap/ip/ipconfig/arp shell commands unless the AgentPi bridge is unavailable.",
-        "2. For host files, processes, VLC, capture cards, cameras, peripherals, or an explicitly requested shell command, use agent_run_shell with commands appropriate for the detected OS.",
-        "3. For a literal path like /mnt/c/... inspect THAT path directly with shell tools instead of cloning anything.",
-        "4. For fresh/current facts, use public_web_search and retry with tighter queries before saying you could not find it.",
-        "5. Use the recent transcript for follow-ups like 'do it again'.",
-        "6. If a tool is needed, respond with JSON ONLY and nothing else.",
+        "2. For a specific IP address, reachability check, or TCP port probe, use agent_check_device. It is cross-platform and does not require nc/netcat.",
+        "3. For Python code/scripts, use agent_run_python. The backend already has a working Python interpreter; never waste steps probing python/py/python3/where or claim Python is not installed because a PATH alias failed.",
+        "4. For host files, processes, VLC, capture cards, cameras, peripherals, or an explicitly requested shell command, use agent_run_shell with commands appropriate for the detected OS.",
+        "5. For a literal path like /mnt/c/... inspect THAT path directly with shell tools instead of cloning anything.",
+        "6. For fresh/current facts, use public_web_search and retry with tighter queries before saying you could not find it.",
+        "7. Use the recent transcript for follow-ups like 'do it again'.",
+        "8. If a tool is needed, respond with JSON ONLY and nothing else.",
         '{"action":"tool","tool":"TOOL_NAME","input":"TEXT_OR_JSON"}',
         '{"action":"final","final":"YOUR FINAL ANSWER"}',
         "",

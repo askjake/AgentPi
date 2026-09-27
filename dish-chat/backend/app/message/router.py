@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from fastapi.responses import StreamingResponse
 
 from app.dependencies import DBSessionDep, UserEmailDep
+from app.db import get_db_session_ctxmgr
 from app.core.utils import datetime_to_iso_utc, UUID_REGEX
 from app.chat.dependencies import ChatServiceDep
 from app.chat.exceptions import ChatNotFoundError, NotAuthorizedError, VaultAccessError
@@ -129,15 +130,18 @@ async def send_message(
     chat_id: Annotated[str, Path(regex=UUID_REGEX)],
     message: InputUserMessage,
     email: UserEmailDep,
-    db_session: DBSessionDep,
     message_service: MessageServiceDep,
     usage_tracking_service: UsageTrackingServiceDep,
     vault_key: VaultKeyDep,
 ) -> StreamingResponse:
     try:
-        stream_agen = await message_service.create_new_message(
-            db_session, chat_id, email, message, vault_key
-        )
+        # Do only the short authorization/checkpoint setup inside a DB session.
+        # Release it before returning StreamingResponse so long/abandoned SSE
+        # streams cannot exhaust the application DB pool.
+        async with get_db_session_ctxmgr() as db_session:
+            stream_agen = await message_service.create_new_message(
+                db_session, chat_id, email, message, vault_key
+            )
         resp_agen = usage_tracking_service.track_astream_generator(
             stream_agen,
             profile={"owner_email": email, "chat_id": chat_id, "task": "chat"},
@@ -193,15 +197,16 @@ async def create_message_version(
     message_id: Annotated[str, Path(regex=UUID_REGEX)],
     user_message: UserMessageUpdate,
     email: UserEmailDep,
-    db_session: DBSessionDep,
     message_service: MessageServiceDep,
     usage_tracking_service: UsageTrackingServiceDep,
     vault_key: VaultKeyDep,
 ):
     try:
-        stream_agen = await message_service.branch_past_message(
-            db_session, chat_id, message_id, email, user_message.content, vault_key
-        )
+        # As above, do not hold a request-scoped DB session while streaming.
+        async with get_db_session_ctxmgr() as db_session:
+            stream_agen = await message_service.branch_past_message(
+                db_session, chat_id, message_id, email, user_message.content, vault_key
+            )
         resp_agen = usage_tracking_service.track_astream_generator(
             stream_agen,
             profile={"owner_email": email, "chat_id": chat_id, "task": "chat"},

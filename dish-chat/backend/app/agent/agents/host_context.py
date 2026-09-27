@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, shutil, subprocess, time
+import os, platform, shutil, subprocess, time
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
@@ -19,16 +19,33 @@ def _any(paths: Iterable[str]) -> list:
 
 def _inner() -> str:
     f: list = []
+    native_windows = os.name == "nt" or platform.system().lower() == "windows"
     pv = Path("/proc/version").read_text(errors="ignore") if Path("/proc/version").exists() else ""
-    wsl = "microsoft" in pv.lower() or bool(os.getenv("WSL_DISTRO_NAME")) or Path("/mnt/c/Windows").exists()
-    if wsl:
+    wsl = (not native_windows) and (
+        "microsoft" in pv.lower()
+        or bool(os.getenv("WSL_DISTRO_NAME"))
+        or Path("/mnt/c/Windows").exists()
+    )
+
+    if native_windows:
+        f += [
+            "You are running natively on Windows.",
+            "Do not assume bash, /proc, ip, ifconfig, hostname -I, Linux ping flags, or other Linux-only commands exist.",
+            "For local network discovery or mapping, prefer agentpi_discover_devices and agentpi_list_devices; these tools are OS-aware and run on this machine.",
+            "Use agent_run_shell only when a listed Windows-safe command is actually appropriate.",
+        ]
+    elif wsl:
         f += [
             "You are running inside WSL on a Windows host.",
             "Linux shell commands run inside WSL; Windows files are under /mnt/c, /mnt/d etc.",
             "Windows commands may be reachable via powershell.exe or cmd.exe.",
+            "For local network discovery or mapping, prefer the agentpi_* tools before shell commands.",
         ]
     else:
-        f.append("You are running on a Linux-like host environment with shell access.")
+        f += [
+            "You are running on a Linux host environment with shell access.",
+            "For local network discovery or mapping, prefer the agentpi_* tools before raw shell commands.",
+        ]
     for b, m in [
         ("powershell.exe", "powershell.exe is available."),
         ("cmd.exe",        "cmd.exe is available."),
@@ -62,9 +79,16 @@ def _inner() -> str:
         "Do NOT ping 'agentpi', 'agentpi.local', or any hostname to check AgentPi health — "
         "call agentpi_health instead."
     )
+    if native_windows:
+        host_desc = "natively on this Windows machine"
+    elif wsl:
+        host_desc = "inside WSL on this Windows host"
+    else:
+        host_desc = "on this Linux host"
+
     f.append(
-        "This process IS the Dish-Chat/Dish-Agent backend running ON the Raspberry Pi. "
-        "No SSH needed for agentpi_* operations."
+        f"This process IS the Dish-Chat/Dish-Agent backend running {host_desc}. "
+        "No SSH is needed for agentpi_* operations because they call the local AgentPi service directly."
     )
     return "\n".join(f"- {x}" for x in f if x)
 

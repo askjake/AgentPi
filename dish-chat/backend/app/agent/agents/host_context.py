@@ -65,7 +65,10 @@ def _inner() -> str:
     if lu:
         f.append("USB/video devices detected by lsusb:")
         f.append(lu)
-    f.append("For host files, processes, cameras, peripherals, bash → prefer agent_run_shell.")
+    if native_windows:
+        f.append("For host files, processes, cameras, or peripherals, use agent_run_shell only with Windows-native commands; do not wrap commands in bash.")
+    else:
+        f.append("For host files, processes, cameras, peripherals, or bash work, prefer agent_run_shell.")
     f.append("For current facts → prefer public_web_search; retry before giving up.")
 
     # PATCH-01: self-identity facts

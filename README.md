@@ -335,3 +335,30 @@ The repository intentionally excludes:
 - virtual environments.
 
 Generic development defaults may exist in source, but service tokens and machine-specific secrets must remain in environment files.
+
+
+## Backend longevity
+
+Streaming chat responses no longer hold request-scoped PostgreSQL sessions for the full SSE/LLM lifetime. Initial authorization/checkpoint setup uses a short DB context, the stream runs without pinning an application DB connection, and usage metadata is written afterward with its own short-lived session.
+
+The SQLAlchemy pool is configured with pre-ping, bounded checkout wait, connection recycling, and LIFO reuse. A PostgreSQL readiness endpoint is available at:
+
+```text
+/rest/api/v1/health/db
+```
+
+It executes a real `SELECT 1` and returns non-secret pool diagnostics. The Windows verifier checks this endpoint.
+
+## Environment-aware network mapping
+
+Dish-Agent now detects native Windows, WSL, and Linux separately. Native Windows guidance explicitly prevents Linux-only command assumptions such as `ip addr`, `hostname -I`, and Linux ping flags.
+
+Requests such as:
+
+```text
+scan my network and map all devices that you find
+```
+
+are routed directly to the local AgentPi bridge. AgentPi performs bounded active neighbor discovery plus mDNS, persists discovered devices in its SQLite inventory, and returns the combined map. Shell-based `nmap`/`ip`/`ipconfig` discovery is only a fallback when the AgentPi bridge is unavailable.
+
+Active discovery does not require administrator rights. It warms the OS neighbor table by touching addresses on attached private IPv4 subnets and then reads the native ARP/neighbor table. Windows and Linux ping argument syntax are handled separately.

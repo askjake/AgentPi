@@ -52,8 +52,12 @@ def agentpi_discover_devices(
             "active_arp": bool(active),
             "active_arp_max_hosts": max(1, min(int(active_max_hosts), 1024)),
         }
-        d = _req("POST", "/rest/api/v1/discovery/scan", body=payload,
-                 t=max(15.0, payload["mdns_timeout"] + 8.0))
+        d = _req(
+            "POST",
+            "/rest/api/v1/discovery/scan",
+            body=payload,
+            t=max(30.0 if active else 15.0, payload["mdns_timeout"] + 8.0),
+        )
         return json.dumps({"sources": d.get("sources", []), "discovered": d.get("discovered", 0),
                            "errors": d.get("errors", []), "inventory": d.get("inventory", {}),
                            "devices": _compact(d)}, indent=2)

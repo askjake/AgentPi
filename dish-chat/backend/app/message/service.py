@@ -273,14 +273,30 @@ class MessageService:
                 checkpoint_id = None
 
         if checkpoint_id is None:
-            # Fall back to latest checkpoint
+            # Fall back to latest checkpoint.
             state = await agent_service.get_latest_checkpoint(
                 db, chat_id, email, vault_key
             )
-            checkpoint_id = state.config["configurable"]["checkpoint_id"]
+            checkpoint_id = (
+                (state.config or {}).get("configurable", {}).get("checkpoint_id")
+            )
+
+        # Windows historically used MemorySaver. After a backend restart, older
+        # PostgreSQL chat/message metadata can outlive its in-memory LangGraph
+        # checkpoint. That state cannot be reconstructed, but the missing
+        # checkpoint must not make the whole chat UI fail with KeyError/500.
+        state_values = getattr(state, "values", None) or {}
+        state_messages = state_values.get("messages") or []
+        if not checkpoint_id or not state_messages:
+            logger.warning(
+                "Chat %s has metadata but no recoverable LangGraph checkpoint; "
+                "returning empty history so the chat remains usable.",
+                chat_id,
+            )
+            return {}
 
         chat_history = await self._format_chat_history(
-            db, checkpoint_id, message_mds, state.values["messages"], email, vault_key
+            db, checkpoint_id, message_mds, state_messages, email, vault_key
         )
 
         return chat_history

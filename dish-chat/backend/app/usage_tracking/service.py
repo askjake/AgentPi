@@ -20,6 +20,14 @@ from .repository import UsageTrackingRepository
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Register one inheritable LangChain callback hook for the process lifetime.
+# The previous implementation created + registered a new ContextVar for every
+# SSE stream, causing the global configure-hook registry to grow indefinitely.
+_usage_metadata_callback_var: ContextVar[Optional[UsageMetadataCallbackHandler]] = ContextVar(
+    "usage_metadata_callback", default=None
+)
+register_configure_hook(_usage_metadata_callback_var, inheritable=True)
+
 
 def get_usage_tracking_service():
     return UsageTrackingService()
@@ -147,12 +155,8 @@ class UsageTrackingService:
 
         """
 
-        usage_metadata_callback_var: ContextVar[
-            Optional[UsageMetadataCallbackHandler]
-        ] = ContextVar(name, default=None)
-        register_configure_hook(usage_metadata_callback_var, inheritable=True)
         cb = UsageMetadataCallbackHandler()
-        usage_metadata_callback_var.set(cb)
+        token = _usage_metadata_callback_var.set(cb)
         try:
             yield cb
             if profile:
@@ -190,7 +194,7 @@ class UsageTrackingService:
                         exc_info=True,
                     )
         finally:
-            usage_metadata_callback_var.set(None)
+            _usage_metadata_callback_var.reset(token)
 
     async def _persist_usage_metadata(
         self,

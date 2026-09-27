@@ -17,6 +17,11 @@ import os
 import platform
 import re
 import shutil
+
+try:
+    import ifaddr
+except ImportError:
+    ifaddr = None
 from typing import Dict, List, Optional
 
 import httpx
@@ -245,6 +250,117 @@ async def _neighbor_entries() -> List[dict]:
     return entries
 
 
+def _local_ipv4_networks(max_networks: int = 4) -> List[ipaddress.IPv4Network]:
+    """Return bounded private IPv4 networks attached to this host."""
+    if ifaddr is None:
+        return []
+    networks: List[ipaddress.IPv4Network] = []
+    seen = set()
+    try:
+        adapters = ifaddr.get_adapters()
+    except Exception as exc:
+        logger.debug("Could not enumerate interfaces for active ARP warmup: %s", exc)
+        return []
+
+    for adapter in adapters:
+        for entry in adapter.ips:
+            raw = entry.ip
+            if not isinstance(raw, str) or ":" in raw:
+                continue
+            try:
+                addr = ipaddress.ip_address(raw)
+                if not isinstance(addr, ipaddress.IPv4Address):
+                    continue
+                if addr.is_loopback or addr.is_link_local or addr.is_multicast or not addr.is_private:
+                    continue
+                prefix = int(getattr(entry, "network_prefix", 24) or 24)
+                # Bound broad enterprise/VPN interfaces to the local /24 containing this host.
+                prefix = max(prefix, 24)
+                network = ipaddress.ip_network(f"{addr}/{prefix}", strict=False)
+            except Exception:
+                continue
+            key = str(network)
+            if key not in seen:
+                seen.add(key)
+                networks.append(network)
+            if len(networks) >= max_networks:
+                return networks
+    return networks
+
+
+async def _ping_for_neighbor(ip: str, timeout: float) -> None:
+    """Touch one local IPv4 address so the OS resolves its ARP entry."""
+    if shutil.which("ping") is None:
+        return
+    system = platform.system().lower()
+    if system == "windows":
+        args = ["ping", "-n", "1", "-w", str(max(100, int(timeout * 1000))), ip]
+    else:
+        args = ["ping", "-c", "1", "-W", str(max(1, int(round(timeout)))), ip]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(proc.communicate(), timeout=max(2.0, timeout + 1.0))
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+    except Exception:
+        return
+
+
+async def _warm_neighbor_cache(
+    max_hosts: int = 768,
+    timeout: float = 0.35,
+    concurrency: int = 96,
+) -> int:
+    """Bounded active L2 discovery.
+
+    Pinging local-subnet addresses forces ARP resolution even when ICMP itself
+    is blocked. After this warmup, the normal OS neighbor-table parser can map
+    substantially more devices without needing nmap, raw sockets, or admin.
+    """
+    networks = _local_ipv4_networks()
+    if not networks:
+        return 0
+
+    targets: List[str] = []
+    local_ips = set()
+    if ifaddr is not None:
+        try:
+            for adapter in ifaddr.get_adapters():
+                for entry in adapter.ips:
+                    if isinstance(entry.ip, str) and ":" not in entry.ip:
+                        local_ips.add(entry.ip)
+        except Exception:
+            pass
+
+    for network in networks:
+        for host in network.hosts():
+            ip = str(host)
+            if ip in local_ips:
+                continue
+            targets.append(ip)
+            if len(targets) >= max_hosts:
+                break
+        if len(targets) >= max_hosts:
+            break
+
+    sem = asyncio.Semaphore(max(1, min(concurrency, 128)))
+
+    async def probe(ip: str) -> None:
+        async with sem:
+            await _ping_for_neighbor(ip, timeout)
+
+    await asyncio.gather(*(probe(ip) for ip in targets))
+    await asyncio.sleep(0.15)
+    logger.info("Active neighbor warmup touched %d hosts across %d local networks", len(targets), len(networks))
+    return len(targets)
+
+
 def _classify(mac: str, vendor: str) -> str:
     hinted = _oui_type(mac)
     if hinted:
@@ -259,8 +375,21 @@ def _classify(mac: str, vendor: str) -> str:
 async def scan_arp(
     lookup_vendors: bool = False,
     vendor_delay: float = 0.5,
+    active_probe: bool = False,
+    active_max_hosts: int = 768,
+    active_timeout: float = 0.35,
 ) -> List[Device]:
-    """Read the local neighbor table and convert entries to canonical Device records."""
+    """Read the local neighbor table and convert entries to canonical Device records.
+
+    When active_probe=True, first touch addresses on attached private subnets to
+    warm the OS ARP/neighbor cache. This is bounded and does not require admin.
+    """
+    if active_probe:
+        await _warm_neighbor_cache(
+            max_hosts=max(1, min(int(active_max_hosts), 1024)),
+            timeout=max(0.1, min(float(active_timeout), 2.0)),
+        )
+
     # Prefer a MAC identity so the same host does not become a new Device when its IP changes.
     by_mac: Dict[str, dict] = {}
     for entry in await _neighbor_entries():

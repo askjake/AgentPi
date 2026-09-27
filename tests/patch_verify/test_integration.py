@@ -218,6 +218,21 @@ def test_environment_aware_network_mapping():
     assert "_warm_neighbor_cache" in arp and "_local_ipv4_networks" in arp, "active neighbor warmup missing"
     assert "active_arp: bool = False" in app, "AgentPi API active_arp field missing"
     assert "def _ping_args(" in tools and 'if os.name == "nt"' in tools, "native ping syntax helper missing"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pytest/runtime persistence isolation
+# ─────────────────────────────────────────────────────────────────────────────
+def test_pytest_persistent_inventory_isolation():
+    conftest = pathlib.Path(os.path.join(REPO, "tests/conftest.py")).read_text()
+    app = pathlib.Path(os.path.join(REPO, "backend/app.py")).read_text()
+
+    assert 'os.environ["AGENTPI_DB"]' in conftest, "pytest import-time AGENTPI_DB isolation missing"
+    assert "isolated_agentpi_db" in conftest and "monkeypatch.setenv" in conftest, "per-test AGENTPI_DB isolation missing"
+    assert "if request.active_arp:" in app, "active/passive ARP call split missing"
+    passive = app[app.index("if request.active_arp:"):app.index("if request.mdns:")]
+    assert "jobs.append(scan_arp(lookup_vendors=request.lookup_vendors))" in passive, "passive scan_arp compatibility call missing"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 def _run_standalone() -> int:
     tests = [

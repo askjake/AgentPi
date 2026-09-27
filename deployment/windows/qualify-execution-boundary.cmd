@@ -25,7 +25,7 @@ echo === ROOT REGRESSION SUITE ===
 .venv-windows\Scripts\python.exe -m pytest -q
 if errorlevel 1 goto failed
 
-echo === DISHCHAT WINDOWS SUITE ===
+echo === DISHCHAT WINDOWS SUITE (INCLUDING LIVE GRAPH IMPORT PATH) ===
 pushd dish-chat\backend || goto failed
 .venv-windows\Scripts\python.exe -m pytest -q tests_windows
 set "DISH_TEST_RC=%ERRORLEVEL%"
@@ -43,6 +43,8 @@ if errorlevel 1 goto failed
 powershell -NoProfile -ExecutionPolicy Bypass -File deployment\windows\start.ps1 -OpenBrowser
 if errorlevel 1 goto failed
 powershell -NoProfile -ExecutionPolicy Bypass -File deployment\windows\verify.ps1
+if errorlevel 1 goto failed
+.venv-windows\Scripts\python.exe deployment\windows\verify-live-planner.py
 if errorlevel 1 goto failed
 
 :passed

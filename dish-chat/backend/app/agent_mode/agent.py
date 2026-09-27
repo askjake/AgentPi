@@ -85,7 +85,17 @@ async def agent_mode_node(state: AgentModeState, config: dict[str, Any] | None =
     llm_with_tools = model.bind_tools(tools)
 
     input_messages = [system, *messages]
-    response = await llm_with_tools.ainvoke(input_messages, config=config)
+    if (getattr(settings, "PLLM_PROVIDER", "") == "coverity-assist"
+            or getattr(model, "_llm_type", "") in {"coverity-assist", "coverity-assist-tool-enabled"}):
+        # Use the same live planner entry point as ordinary chat. Merely
+        # importing it without calling it did not apply the execution fixes.
+        planner_config = dict(config or {})
+        planner_config["configurable"] = dict(planner_config.get("configurable", {}))
+        planner_config["configurable"]["thread_id"] = chat_id
+        response = await run_coverity_tool_loop(
+            model=model, tools=tools, messages=input_messages, config=planner_config)
+    else:
+        response = await llm_with_tools.ainvoke(input_messages, config=config)
 
     # Time the LLM call
     start_time = time.time()

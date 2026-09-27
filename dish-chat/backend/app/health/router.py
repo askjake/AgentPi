@@ -41,3 +41,18 @@ async def database_health_check() -> dict:
         "component": "postgresql",
         "pool": pool_status,
     }
+
+
+@router.get("/health/execution", tags=["health"])
+async def execution_health_check() -> dict:
+    """Identify the LOADED chat/agent bindings; no tool or provider is invoked."""
+    import os
+    from app.agent.agents import agentic_rag, coverity_tool_loop
+    from app.agent_mode import agent
+    identity = coverity_tool_loop.execution_identity()
+    identity['chat_binding_matches'] = agentic_rag.run_coverity_tool_loop is coverity_tool_loop.run_coverity_tool_loop
+    identity['agent_mode_binding_matches'] = agent.run_coverity_tool_loop is coverity_tool_loop.run_coverity_tool_loop
+    identity['pid'] = os.getpid()
+    identity['status'] = 'binding_verified' if identity['chat_binding_matches'] and identity['agent_mode_binding_matches'] else 'binding_mismatch'
+    # Deliberately excludes credentials, URLs, user paths and conversation IDs.
+    return identity

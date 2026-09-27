@@ -1,0 +1,268 @@
+"""Import the real production CALLERS and dispatch modules.
+
+Only external providers/framework dependencies are stubbed in this portable
+suite. The deployed tests_windows suite also exercises the real framework and
+registry with a fake model. Never select the implementation by an AST path.
+"""
+from __future__ import annotations
+import asyncio
+import hashlib
+import importlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import sys
+import types
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / 'dish-chat/backend'
+PROMPT = 'write and run a small Python script that prints the Python executable, Python version, hostname, and current working directory'
+
+
+class Human:
+    type = 'human'
+    def __init__(self, content, **kwargs):
+        self.content = content
+        self.tool_calls = []
+
+
+class AI(Human):
+    type = 'ai'
+
+
+class System(Human):
+    type = 'system'
+
+
+class Tool(Human):
+    type = 'tool'
+
+
+class Model:
+    _llm_type = 'coverity-assist'
+    def __init__(self, replies=()):
+        self.replies = list(replies)
+        self.calls = 0
+    def bind_tools(self, tools):
+        return self
+    async def ainvoke(self, messages, config=None):
+        self.calls += 1
+        if not self.replies:
+            raise AssertionError('Unexpected provider request')
+        return AI(self.replies.pop(0))
+
+
+@pytest.fixture
+def runtime(tmp_path):
+    monkeypatch = pytest.MonkeyPatch()
+    saved = {k: v for k, v in sys.modules.items() if k == 'app' or k.startswith('app.')}
+    for key in saved:
+        sys.modules.pop(key)
+    monkeypatch.syspath_prepend(str(BACKEND))
+    inserted = []
+    def mod(name, **attrs):
+        m = types.ModuleType(name)
+        m.__dict__.update(attrs)
+        monkeypatch.setitem(sys.modules, name, m)
+        inserted.append(name)
+        return m
+    messages = dict(BaseMessage=Human, HumanMessage=Human, AIMessage=AI,
+                    SystemMessage=System, ToolMessage=Tool)
+    mod('langchain_core.messages', **messages)
+    mod('langchain_core', __path__=[])
+    mod('langgraph', __path__=[])
+    mod('langgraph.graph', END='__end__', START='__start__', StateGraph=object, __path__=[])
+    mod('langgraph.graph.message', add_messages=lambda a, b: a+b)
+    mod('langgraph.prebuilt', ToolNode=object, tools_condition=lambda s: '__end__')
+    mod('langgraph.checkpoint', __path__=[])
+    mod('langgraph.checkpoint.base', BaseCheckpointSaver=object)
+    settings = types.SimpleNamespace(MAX_OUTPUT_COUNT=2048, MAX_CACHEPOINT_CNT=4,
+                                     PLLM_PROVIDER='coverity-assist', AGENT_MODE_MODEL=None)
+    mod('app.config', get_settings=lambda: settings)
+    model = Model()
+    async def unexpected(*args, **kwargs):
+        raise AssertionError('Unexpected remote path')
+    mod('app.core.llm', get_model=lambda **kw: model, invoke_with_retry=unexpected, __path__=[])
+    mod('app.core.llm.coverity_assist_chat_model', CoverityAssistChatModel=Model)
+    mod('app.core.utils', get_datestr_now=lambda: 'test')
+    mod('app.core.prompt_compression', get_prompt_compressor=lambda: types.SimpleNamespace(needs_compression=lambda m: False))
+    mod('app.agent.db_utils', get_checkpointer=lambda: None)
+    mod('app.agent.utils', aggressive_cachept=lambda m, _: m, cleanup_cachept=lambda m: None,
+        set_model_config=lambda *a: None)
+    mod('app.agent.methodology_utils', inject_methodology_into_prompt=lambda p, u: p)
+    mod('app.agent.agents.utils', get_prompt=lambda _: 'Test system prompt')
+    mod('app.agent.agents.host_context', build_host_context=lambda: 'offline fixture')
+    spy = types.SimpleNamespace(thought=lambda *a: None, context_update=lambda *a: None, decision=lambda *a, **k: None)
+    mod('app.agent_mode.thought_interceptor', interceptor=spy)
+
+    class LocalTool:
+        name = 'agent_run_python'
+        description = 'Controlled local subprocess fixture'
+        async def ainvoke(self, payload):
+            workspace = tmp_path / payload['chat_id']
+            workspace.mkdir(parents=True, exist_ok=True)
+            script = workspace / payload['filename']
+            script.write_text(payload['code'], encoding='utf-8')
+            done = await asyncio.to_thread(subprocess.run, [sys.executable, str(script)],
+                                          cwd=workspace, capture_output=True, text=True, timeout=10)
+            return f'return code={done.returncode}\n{done.stdout}{done.stderr}'
+    tools = [LocalTool(), types.SimpleNamespace(name='public_web_search', ainvoke=unexpected)]
+    mod('app.agent.agents.tools', get_tools_set=lambda kind: tools if kind == 'agent_mode' else [])
+    mod('app.agent_mode.tools', BASE_AGENT_WORKDIR=str(tmp_path))
+    try:
+        # All three paths and their imports resolve from the real source tree.
+        rag = importlib.import_module('app.agent.agents.agentic_rag')
+        mode = importlib.import_module('app.agent_mode.agent')
+        live = importlib.import_module('app.agent.agents.coverity_tool_loop')
+        impl = importlib.import_module('app.agent.agents.coverity_tool_loop_token_limit')
+        yield types.SimpleNamespace(rag=rag, mode=mode, live=live, impl=impl, model=model,
+                                    tools=tools, base=tmp_path)
+    finally:
+        monkeypatch.undo()
+        for key in list(sys.modules):
+            if key == 'app' or key.startswith('app.'):
+                sys.modules.pop(key, None)
+        sys.modules.update(saved)
+
+
+def run_chat(rt, prompt, prior=None):
+    return asyncio.run(rt.rag.call_model(
+        {'messages': [*(prior or []), Human(prompt)], 'model_config': {}},
+        {'configurable': {'thread_id': 'test-chat'}}))['messages'][0].content
+
+
+def test_chat_import_is_the_live_boundary(runtime):
+    assert runtime.rag.run_coverity_tool_loop is runtime.live.run_coverity_tool_loop
+    assert runtime.live.implementation is runtime.impl
+    assert runtime.mode.run_coverity_tool_loop is runtime.live.run_coverity_tool_loop
+
+
+def test_real_chat_node_runs_probe_without_web_or_llm(runtime):
+    out = run_chat(runtime, PROMPT)
+    assert 'Local agent_run_python result' in out
+    assert 'return code=0' in out
+    assert sys.executable in out
+    assert socket.gethostname() in out
+    assert str(runtime.base / 'test-chat') in out
+    assert (runtime.base / 'test-chat/runtime_probe.py').is_file()
+    assert runtime.model.calls == 0
+
+
+def test_real_agent_mode_node_uses_same_planner(runtime):
+    answer = asyncio.run(runtime.mode.agent_mode_node(
+        {'messages': [Human(PROMPT)], 'chat_id': 'mode-chat', 'iterations': 0}, config=None))
+    assert 'return code=0' in answer['messages'][0].content
+    assert (runtime.base / 'mode-chat/runtime_probe.py').is_file()
+    assert runtime.model.calls == 0
+
+
+def test_mcop_description_is_not_a_fabricated_demonstration(runtime):
+    out = run_chat(runtime, 'describe your MCOP backend functionality.')
+    assert 'Multi-Conversation Orchestration Protocol' in out
+    assert 'NOT implemented' in out
+    assert 'Multi-Channel' not in out
+    assert runtime.model.calls == 0
+
+
+def test_mcop_demo_followup_does_not_run_random_tools(runtime):
+    out = run_chat(runtime, 'please test and exhibit it in action',
+                   [Human('describe your MCOP backend functionality.'), AI('Misleading old answer')])
+    assert 'No child conversation' in out
+    assert runtime.model.calls == 0
+
+
+def test_missing_file_followup_reads_disk_not_assistant_claims(runtime):
+    out = run_chat(runtime, 'did you finish?',
+                   [Human('create a desktop app'), AI('home_manager.py written, 26347 bytes; shortcut created')])
+    assert 'ARTIFACT_READBACK_ONLY' in out
+    assert 'workspace_not_found' in out
+    assert 'No syntax test' in out
+    assert not (runtime.base / 'test-chat').exists()
+    assert runtime.model.calls == 0
+
+
+def test_existing_file_not_certified_as_complete(runtime):
+    workspace = runtime.base / 'test-chat'; workspace.mkdir()
+    f = workspace/'home_manager.py'; f.write_text('not valid python\n', encoding='utf-8')
+    out = run_chat(runtime, 'did you finish?', [Human('write a GUI app')])
+    assert str(f) in out
+    assert hashlib.sha256(f.read_bytes()).hexdigest() in out
+    assert 'No syntax test' in out
+    assert runtime.model.calls == 0
+
+
+def test_model_cannot_certify_missing_local_artifact(runtime):
+    runtime.model.replies = [json.dumps({'action':'final', 'final':'COMPLETE: home_manager.py written. Shortcut created.'})]
+    out = run_chat(runtime, 'build a desktop application')
+    assert 'ARTIFACT_READBACK_ONLY' in out
+    assert 'workspace_not_found' in out
+    assert 'COMPLETE:' not in out
+
+
+def test_contract_identifies_loaded_implementation(runtime):
+    info = runtime.live.execution_identity()
+    assert info['contract'] == 'agentpi-live-planner-v1'
+    assert info['mcop']['implemented_in_this_revision'] is False
+    assert info['loaded_implementation_sha256'] == hashlib.sha256(Path(runtime.impl.__file__).read_bytes()).hexdigest()
+    assert 'bearer' not in json.dumps(info).lower()
+
+
+@pytest.mark.parametrize('identity', ['../other', '/tmp', 'x/y', 'x\\y', '', None], ids=['traversal','absolute','slash','backslash','empty','none'])
+def test_readback_cannot_cross_workspace_boundary(runtime, identity):
+    module = importlib.import_module('app.agent.agents.artifact_readback')
+    report = module.readback(runtime.base, identity)
+    assert report['status'] == 'invalid_workspace_identity'
+    assert not report['complete_scan']
+
+
+def test_readback_skips_secret_files_and_venvs(runtime):
+    module = importlib.import_module('app.agent.agents.artifact_readback')
+    ws=runtime.base/'test-chat';ws.mkdir()
+    (ws/'.env').write_text('PASSWORD=do-not-output')
+    (ws/'app.py').write_text('print(1)')
+    (ws/'.venv').mkdir();(ws/'.venv/dependency.py').write_text('do-not-scan')
+    report=module.readback(runtime.base,'test-chat')
+    assert len(report['artifacts'])==1
+    assert 'do-not-output' not in json.dumps(report)
+    assert report['artifacts'][0]['path']==str(ws/'app.py')
+
+
+def test_readback_rejects_symlink_workspace(runtime):
+    module=importlib.import_module('app.agent.agents.artifact_readback')
+    other=runtime.base/'other';other.mkdir()
+    try:
+        (runtime.base/'test-chat').symlink_to(other, target_is_directory=True)
+    except OSError:
+        pytest.skip('host does not permit symlinks')
+    assert module.readback(runtime.base,'test-chat')['status']=='workspace_link_rejected'
+
+
+def test_readback_bounded_large_file(runtime):
+    module=importlib.import_module('app.agent.agents.artifact_readback')
+    ws=runtime.base/'test-chat';ws.mkdir()
+    with (ws/'huge.py').open('wb') as handle:
+        handle.truncate(module._MAX_BYTES+1)
+    report=module.readback(runtime.base,'test-chat')
+    assert report['artifacts'][0]['sha256'] is None
+    assert not report['complete_scan']
+
+
+def test_verifier_rejects_old_runtime_hash(runtime):
+    path=ROOT/'deployment/windows/verify-live-planner.py'
+    spec=importlib.util.spec_from_file_location('runtime_verify_fixture',path)
+    module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    report=runtime.live.execution_identity()
+    report.update(chat_binding_matches=True, agent_mode_binding_matches=True)
+    module.verify(ROOT,report)
+    report['loaded_entrypoint_sha256']='0'*64
+    with pytest.raises(ValueError,match='Running process/source mismatch'):
+        module.verify(ROOT,report)
+
+
+def test_mcop_implementation_request_is_not_intercepted(runtime):
+    assert not runtime.live._mcop_question('implement MCOP for this agent', [])

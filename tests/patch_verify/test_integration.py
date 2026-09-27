@@ -207,6 +207,59 @@ def test_windows_agentpi_port_fallback():
 
 check("Windows AgentPi port fallback contract", test_windows_agentpi_port_fallback)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend longevity: streaming responses must not pin request DB sessions
+# ─────────────────────────────────────────────────────────────────────────────
+def test_stream_db_lifetime():
+    router = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/message/router.py")).read_text()
+    usage = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/usage_tracking/service.py")).read_text()
+    dbbase = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/db/base.py")).read_text()
+
+    send_start = router.index('async def send_message(')
+    send_end = router.index('@router.get("/chats/{chat_id}/messages/{message_id}/versions")')
+    send_body = router[send_start:send_end]
+    assert "db_session: DBSessionDep" not in send_body, "send_message still owns request-scoped DB session"
+    assert "async with get_db_session_ctxmgr() as db_session" in send_body, "short setup DB context missing"
+
+    branch_start = router.index('async def create_message_version(')
+    branch_end = router.index('@router.put("/chats/{chat_id}/messages/{message_id}/versions")')
+    branch_body = router[branch_start:branch_end]
+    assert "db_session: DBSessionDep" not in branch_body, "version stream still owns request-scoped DB session"
+
+    assert "profile=None, db=None" in usage, "usage tracker still binds DB session to stream callback"
+    assert "persisted afterward with its own short-lived session" in usage, "usage short-session hardening missing"
+    assert "pool_timeout=" in dbbase and "pool_recycle=" in dbbase and "pool_use_lifo=True" in dbbase, "DB pool hardening missing"
+
+check("backend SSE DB-session lifetime + pool hardening", test_stream_db_lifetime)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Environment-aware network mapping
+# ─────────────────────────────────────────────────────────────────────────────
+def test_environment_aware_network_mapping():
+    host = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/host_context.py")).read_text()
+    loop = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
+    bridge = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/tools/agentpi_bridge.py")).read_text()
+    arp = pathlib.Path(os.path.join(REPO, "backend/discovery/arp.py")).read_text()
+    app = pathlib.Path(os.path.join(REPO, "backend/app.py")).read_text()
+    tools = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent_mode/tools.py")).read_text()
+
+    assert 'native_windows = os.name == "nt"' in host, "native Windows detection missing"
+    assert "You are running natively on Windows." in host, "Windows host guidance missing"
+    assert "running ON the Raspberry Pi" not in host, "stale unconditional Pi identity remains"
+
+    assert '"scan my network"' in loop and '"map my network"' in loop, "network intent phrases missing"
+    assert '"active": True' in loop, "network fast-path does not request active AgentPi discovery"
+    assert "ALWAYS prefer agentpi_discover_devices" in loop, "planner AgentPi network preference missing"
+
+    assert "active: bool = False" in bridge and '"active_arp": bool(active)' in bridge, "bridge active discovery contract missing"
+    assert "_warm_neighbor_cache" in arp and "_local_ipv4_networks" in arp, "active neighbor warmup missing"
+    assert "active_arp: bool = False" in app, "AgentPi API active_arp field missing"
+    assert "def _ping_args(" in tools and 'if os.name == "nt"' in tools, "native ping syntax helper missing"
+
+check("environment-aware Windows/network mapping route", test_environment_aware_network_mapping)
+
 # ─────────────────────────────────────────────────────────────────────────────
 print()
 print("=" * 56)

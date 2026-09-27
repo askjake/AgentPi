@@ -29,6 +29,7 @@ os.environ["FASTAPI_HOST"] = "0.0.0.0"
 os.environ["FASTAPI_PORT"] = "8000"
 os.environ["AGENTPI_URL"] = os.environ.get("AGENTPI_URL", "http://127.0.0.1:8765")
 os.environ["AGENT_MODE_WORKDIR"] = str(ROOT / "runtime" / "workspaces")
+os.environ["IDLE_CHAT_CHECKER_ENABLED"] = os.environ.get("IDLE_CHAT_CHECKER_ENABLED", "false")
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())

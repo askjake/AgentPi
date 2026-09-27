@@ -215,6 +215,7 @@ def test_stream_db_lifetime():
     router = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/message/router.py")).read_text()
     usage = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/usage_tracking/service.py")).read_text()
     dbbase = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/db/base.py")).read_text()
+    health = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/health/router.py")).read_text()
 
     send_start = router.index('async def send_message(')
     send_end = router.index('@router.get("/chats/{chat_id}/messages/{message_id}/versions")')
@@ -229,7 +230,11 @@ def test_stream_db_lifetime():
 
     assert "profile=None, db=None" in usage, "usage tracker still binds DB session to stream callback"
     assert "persisted afterward with its own short-lived session" in usage, "usage short-session hardening missing"
+    assert "_usage_metadata_callback_var" in usage, "module-level usage callback ContextVar missing"
+    assert usage.count("register_configure_hook(") == 1, "usage callback hook is registered more than once"
+    assert "_usage_metadata_callback_var.reset(token)" in usage, "usage callback token reset missing"
     assert "pool_timeout=" in dbbase and "pool_recycle=" in dbbase and "pool_use_lifo=True" in dbbase, "DB pool hardening missing"
+    assert '"/health/db"' in health and "SELECT 1" in health and "pool.status()" in health, "DB readiness diagnostics missing"
 
 check("backend SSE DB-session lifetime + pool hardening", test_stream_db_lifetime)
 

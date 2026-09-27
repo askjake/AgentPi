@@ -78,26 +78,39 @@ def _inject_chat_id_if_needed(tool: Any, tool_input: Any, chat_id: Optional[str]
 
 
 async def _invoke_tool(tool: Any, tool_input: Any, chat_id: Optional[str] = None) -> Any:
+    """Dispatch once; synchronous adapters must not block the ASGI event loop."""
     tool_input = _inject_chat_id_if_needed(tool, tool_input, chat_id)
-    if hasattr(tool, "ainvoke"):
-        return await tool.ainvoke(tool_input)
-    if hasattr(tool, "invoke"):
-        return tool.invoke(tool_input)
-    if asyncio.iscoroutinefunction(tool):
-        if isinstance(tool_input, dict):
-            try:
-                return await tool(**tool_input)
-            except TypeError:
-                return await tool(tool_input)
-        return await tool(tool_input)
-    if callable(tool):
-        if isinstance(tool_input, dict):
-            try:
-                return tool(**tool_input)
-            except TypeError:
-                return tool(tool_input)
-        return tool(tool_input)
-    raise TypeError(f"Unsupported tool type: {type(tool)!r}")
+    name = _tool_name(tool)
+    logger.info("TOOL_DISPATCH tool=%s state=started", name)
+    try:
+        if hasattr(tool, "ainvoke"):
+            result = await tool.ainvoke(tool_input)
+        elif hasattr(tool, "invoke"):
+            result = await asyncio.to_thread(tool.invoke, tool_input)
+        elif callable(tool):
+            call_args = (tool_input,)
+            call_kwargs = {}
+            if isinstance(tool_input, dict):
+                # Decide the calling convention BEFORE execution. A TypeError
+                # raised inside a tool must never cause a second invocation.
+                try:
+                    inspect.signature(tool).bind(**tool_input)
+                except (TypeError, ValueError):
+                    pass
+                else:
+                    call_args, call_kwargs = (), tool_input
+            if asyncio.iscoroutinefunction(tool):
+                result = await tool(*call_args, **call_kwargs)
+            else:
+                result = await asyncio.to_thread(tool, *call_args, **call_kwargs)
+        else:
+            raise TypeError(f"Unsupported tool type: {type(tool)!r}")
+    except Exception as exc:
+        logger.warning("TOOL_DISPATCH tool=%s state=raised error_type=%s", name, type(exc).__name__)
+        raise
+    # 'returned' is not 'succeeded': existing tools can return error strings.
+    logger.info("TOOL_DISPATCH tool=%s state=returned", name)
+    return result
 
 
 def _content_to_text(content: Any) -> str:
@@ -157,44 +170,55 @@ def _extract_system_text(messages: list[BaseMessage]) -> str:
 
 
 def _extract_json_objects(text: str) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
+    """Decode one complete top-level object; never salvage nested code fragments."""
     text = text.strip()
-    if not text:
-        return candidates
-    for candidate in [text]:
-        try:
-            obj = json.loads(candidate)
-            if isinstance(obj, dict):
-                candidates.append(obj)
-        except Exception:
-            pass
-    for m in re.finditer(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S):
-        try:
-            obj = json.loads(m.group(1))
-            if isinstance(obj, dict):
-                candidates.append(obj)
-        except Exception:
-            pass
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("{") and stripped.endswith("}"):
-            try:
-                obj = json.loads(stripped)
-                if isinstance(obj, dict):
-                    candidates.append(obj)
-            except Exception:
-                pass
-    return candidates
+    if not text or len(text) > 65_536:
+        return []
+
+    def unique_keys(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError("duplicate JSON key")
+            obj[key] = value
+        return obj
+
+    def reject_constant(value):
+        raise ValueError("non-finite JSON constant")
+
+    start = text.find("{")
+    if start < 0 or text[:start].rstrip().endswith("["):
+        return []
+    try:
+        obj, end = json.JSONDecoder(object_pairs_hook=unique_keys, parse_constant=reject_constant).raw_decode(text, start)
+    except (ValueError, RecursionError):
+        return []
+    # More than one object/array after the plan is ambiguous. Do not choose one.
+    suffix = text[end:].strip()
+    if any(char in suffix for char in "{}[]") or not isinstance(obj, dict):
+        return []
+    return [obj]
 
 
 def _pick_action_payload(text: str) -> Optional[dict[str, Any]]:
     candidates = _extract_json_objects(text)
-    if not candidates:
+    if len(candidates) != 1:
         return None
-    for obj in reversed(candidates):
-        if str(obj.get("action", "")).lower() in {"tool", "final"}:
-            return obj
-    return candidates[-1]
+    obj = candidates[0]
+    action = obj.get("action")
+    if action == "tool":
+        if not isinstance(obj.get("tool"), str) or not obj["tool"].strip():
+            return None
+        if "input" not in obj or not isinstance(obj["input"], (dict, str)):
+            return None
+    elif action == "final":
+        if not isinstance(obj.get("final"), str) or not obj["final"].strip():
+            return None
+        if any(part.get("action") == "tool" for part in _extract_json_objects(obj["final"])):
+            return None  # A tool directive is not a user-facing final answer.
+    else:
+        return None
+    return obj
 
 
 def _render_tool_catalog(tools: list[NormalizedTool]) -> str:
@@ -221,9 +245,49 @@ def _planner_model(model: Any) -> Any:
     return model
 
 
-def _looks_like_fresh_info_request(user_text: str) -> bool:
+def _looks_like_local_execution_request(user_text: str) -> bool:
+    """Identify execution/artifact intent before matching generic words like current."""
     t = user_text.lower()
-    return any(phrase in t for phrase in ["who won", "what happened", "today", "latest", "current", "news", "superbowl", "super bowl", "score", "winner"])
+    if re.search(r"\b(?:working directory|cwd|sys\.executable|socket\.gethostname)\b", t):
+        return True
+    return bool(
+        re.search(r"\b(?:write|build|create|generate|run|execute|implement|test)\b", t)
+        and re.search(r"\b(?:python|script|code|app|application|gui|shortcut)\b", t)
+    )
+
+
+def _runtime_probe_payload(user_text: str) -> Optional[dict[str, Any]]:
+    """A narrow, finite local diagnostic; broader code requests go to the planner."""
+    t = " ".join(user_text.lower().split()).rstrip(".!?")
+    pattern = (
+        r"(?:please )?(?:write and )?(?:run|execute) (?:a )?(?:small )?python script "
+        r"(?:that prints|to print) (?:the )?python executable, (?:the )?python version, "
+        r"(?:the )?hostname,? and (?:the )?current working directory"
+    )
+    if not re.fullmatch(pattern, t):
+        return None
+    return {
+        "filename": "runtime_probe.py",
+        "use_venv": False,
+        "code": (
+            "import os, socket, sys\n"
+            "print('Python executable:', sys.executable)\n"
+            "print('Python version:', sys.version)\n"
+            "print('Hostname:', socket.gethostname())\n"
+            "print('Working directory:', os.getcwd())\n"
+        ),
+    }
+
+
+def _looks_like_fresh_info_request(user_text: str) -> bool:
+    if _looks_like_local_execution_request(user_text):
+        return False
+    # 'current' alone is not evidence of a request for public information.
+    return bool(re.search(
+        r"\b(?:who won|what happened|today|latest|news|superbowl|super bowl|score|winner)\b"
+        r"|\bcurrent\s+(?:events|news|weather|prices?|president|ceo|release)\b",
+        user_text, re.I,
+    ))
 
 
 def _looks_like_network_request(user_text: str) -> bool:
@@ -387,6 +451,10 @@ async def _search_harder(query: str, tool: Any, chat_id: Optional[str],
 
 
 async def _maybe_handle_obvious_direct_task(user_text: str, tool_map: dict[str, NormalizedTool], chat_id: Optional[str]) -> Optional[str]:
+    # A Python/GUI task mentioning "current", "camera", or "working directory"
+    # is not permission to send it to web search or a Linux shell template.
+    if _looks_like_local_execution_request(user_text):
+        return None
     if _looks_like_device_probe_request(user_text) and "agent_check_device" in tool_map:
         ip_address = _extract_ipv4_address(user_text)
         port = _extract_requested_port(user_text)
@@ -474,7 +542,9 @@ def _build_planner_prompt(user_text: str, recent_transcript: str, system_text: s
         "5. For a literal path like /mnt/c/... inspect THAT path directly with shell tools instead of cloning anything.",
         "6. For fresh/current facts, use public_web_search and retry with tighter queries before saying you could not find it.",
         "7. Use the recent transcript for follow-ups like 'do it again'.",
-        "8. If a tool is needed, respond with JSON ONLY and nothing else.",
+        "8. If a tool is needed, respond with one complete JSON object ONLY. A printed tool directive is not execution.",
+        "9. Build large artifacts in small verified chunks. Do not put an entire GUI into one tool call; inspect actual API schemas first, then write, parse/compile, and smoke-test files separately.",
+        "10. Do not run a persistent GUI mainloop in a bounded Python execution call. Preparing an app, testing it, creating a shortcut, and launching it are distinct operations.",
         '{"action":"tool","tool":"TOOL_NAME","input":"TEXT_OR_JSON"}',
         '{"action":"final","final":"YOUR FINAL ANSWER"}',
         "",
@@ -510,8 +580,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     if model is not None and isinstance(model, list) and tools is None and messages is None:
         tools = model
         model = None
-    model = model or kwargs.get("model_with_tools") or kwargs.get("llm") or get_model()
-    planner_model = _planner_model(model)
+    model = model or kwargs.get("model_with_tools") or kwargs.get("llm")
     tools = tools or kwargs.get("available_tools") or []
     messages = messages or kwargs.get("state_messages") or []
 
@@ -523,6 +592,24 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     system_text = _extract_system_text(messages)
     chat_id = _extract_chat_id(config)
 
+    probe = _runtime_probe_payload(user_text)
+    if probe is not None:
+        # Already-defined finite diagnostic: no web, AgentPi HTTP request, or
+        # summarizer is necessary. Report the real local executor result.
+        if not chat_id:
+            return AIMessage(content="LOCAL_EXECUTION_BLOCKED: current chat/workspace identity is missing. No script was run.")
+        if "agent_run_python" not in tool_map:
+            return AIMessage(content="LOCAL_EXECUTION_BLOCKED: agent_run_python is not bound to this conversation. No script was run.")
+        probe["chat_id"] = chat_id
+        logger.info("LOCAL_ROUTE intent=runtime_probe tool=agent_run_python")
+        try:
+            result = await _invoke_tool(tool_map["agent_run_python"].raw, probe, chat_id=chat_id)
+        except Exception as exc:
+            return AIMessage(content=f"agent_run_python raised {type(exc).__name__}. No execution output was returned; check the backend tool-dispatch log.")
+        return AIMessage(content="Local agent_run_python result (actual executor output):\n\n" + _content_to_text(result))
+
+    model = model or get_model()
+    planner_model = _planner_model(model)
     direct_tool_result = await _maybe_handle_obvious_direct_task(user_text, tool_map, chat_id)
     if direct_tool_result is not None:
         final_text = await _summarize_tool_result(model, user_text, str(direct_tool_result), config=config)
@@ -531,6 +618,8 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     planner_steps = max_steps or int(os.getenv("COVERITY_ASSIST_TOOL_MAX_STEPS", "6"))
     scratchpad: list[str] = []
     last_text = ""
+    protocol_failures = 0
+    returned_tools: list[str] = []
 
     for _ in range(planner_steps):
         planner_prompt = _build_planner_prompt(user_text, recent_transcript, system_text, normalized_tools, scratchpad, chat_id)
@@ -540,7 +629,20 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
 
         payload = _pick_action_payload(last_text)
         if not payload:
-            return AIMessage(content=last_text)
+            protocol_failures += 1
+            logger.warning("PLANNER_PROTOCOL_REJECTED attempt=%d response_chars=%d", protocol_failures, len(last_text))
+            if protocol_failures >= 2:
+                returned = ", ".join(returned_tools) or "none"
+                return AIMessage(content=(
+                    "PLANNER_PROTOCOL_INVALID: the planner did not return a complete, valid action after two attempts. "
+                    "The rejected directives were not executed. Tools that previously returned in this turn: "
+                    + returned + ". No artifact or shortcut completion is inferred."
+                ))
+            scratchpad.append(
+                "PROTOCOL ERROR: previous response was not dispatched. Return exactly one complete JSON tool/final object. "
+                "Use small code chunks, not a whole application. Do not repeat previously completed actions."
+            )
+            continue
         action = str(payload.get("action", "")).lower().strip()
         if action == "final":
             return AIMessage(content=str(payload.get("final", "")).strip())
@@ -556,6 +658,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
         selected = tool_map[tool_name]
         try:
             result = await _invoke_tool(selected.raw, tool_input, chat_id=chat_id)
+            returned_tools.append(selected.name)
         except Exception as exc:
             result = f"Tool {selected.name} failed: {exc}"
 
@@ -573,6 +676,8 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
             logger.warning("[SCRATCHPAD] tool=%s truncated %d->%d chars", selected.name, _ol, SCRATCHPAD_LIMIT)
         scratchpad.append(f"Tool used: {selected.name}\nInput: {tool_input}\nResult: {_b}{_mk}")
 
+    if protocol_failures and not returned_tools:
+        return AIMessage(content="PLANNER_PROTOCOL_INVALID: no tool execution result was obtained before the planning budget ended. No completion is claimed.")
     if scratchpad:
         grounded = await _summarize_tool_result(model, user_text, "\n\n".join(scratchpad), config=config)
         return AIMessage(content=grounded)

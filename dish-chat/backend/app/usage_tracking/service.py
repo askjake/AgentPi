@@ -192,22 +192,64 @@ class UsageTrackingService:
         finally:
             usage_metadata_callback_var.set(None)
 
+    async def _persist_usage_metadata(
+        self,
+        cb: UsageMetadataCallbackHandler,
+        profile: Optional[dict[str, str]],
+    ) -> None:
+        """Persist collected usage metadata using a short-lived DB session."""
+        if not profile or not cb.usage_metadata:
+            return
+        if not profile.get("owner_email") or not profile.get("chat_id") or not profile.get("task"):
+            logger.warning("Skipping usage persistence: incomplete profile %r", profile)
+            return
+
+        records = []
+        for model_name, usage_metadata in cb.usage_metadata.items():
+            records.append(
+                UsageTrackingCreate(
+                    owner_id=profile["owner_email"],
+                    chat_id=profile["chat_id"],
+                    model=model_name,
+                    task=profile["task"],
+                    input_tokens=usage_metadata.get("input_tokens", 0),
+                    input_cache_read=usage_metadata.get("input_token_details", {}).get("cache_read", 0),
+                    input_cache_create=usage_metadata.get("input_token_details", {}).get("cache_creation", 0),
+                    output_tokens=usage_metadata.get("output_tokens", 0),
+                )
+            )
+        if not records:
+            return
+
+        try:
+            async with get_db_session_ctxmgr() as db:
+                await self.usage_tracking_repo.create_many(db, objs_in=records)
+            logger.info("Saved %d usage tracking records after stream completion", len(records))
+        except Exception:
+            logger.exception("Unexpected error when saving usage metadata after stream")
+
     async def track_astream_generator(
         self,
         astream: AsyncGenerator[str, None],
         profile: Optional[dict[str, str]] = None,
     ) -> AsyncGenerator[str, None]:
-        """
-        Track usage metadata for an async generator stream.
+        """Track model usage without holding a DB connection for the SSE lifetime.
 
-        params:
-            astream (AsyncGenerator): The async generator to track.
-            db (AsyncSession): The database session.
-            profile (Optional[dict[str, str]]): Optional profile information for tracking.
-        returns:
-            AsyncGenerator yielding the items from the astream.
+        The previous implementation opened a PostgreSQL session before entering
+        the async stream and kept it checked out until the client finished or
+        disconnected. Long-running or abandoned SSE responses could therefore
+        exhaust the SQLAlchemy pool and make ordinary chat list/create/load
+        endpoints appear hung.
+
+        Usage metadata is now collected in-memory while streaming and persisted
+        afterward with its own short-lived session.
         """
-        async with get_db_session_ctxmgr() as db:
-            async with self.get_async_usage_metadata_callback(profile=profile, db=db):
+        cb: Optional[UsageMetadataCallbackHandler] = None
+        try:
+            async with self.get_async_usage_metadata_callback(profile=None, db=None) as cb:
                 async for item in astream:
                     yield item
+        finally:
+            if cb is not None:
+                await self._persist_usage_metadata(cb, profile)
+

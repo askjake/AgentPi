@@ -7,6 +7,10 @@ from langchain.tools import tool
 def _base() -> str:
     return os.environ.get("AGENTPI_URL", "http://127.0.0.1:8765").rstrip("/")
 
+def _base_url() -> str:
+    """Backward-compatible alias retained for Windows tests/callers."""
+    return _base()
+
 def _req(method: str, path: str, *, body=None, params=None, t: float = 30.0):
     with httpx.Client(timeout=t) as c:
         r = c.request(method, _base() + path, json=body, params=params)
@@ -21,6 +25,10 @@ def _compact(data: dict, lim: int = 100) -> list:
          "manufacturer": d.get("manufacturer"), "online": d.get("online")}
         for d in (data.get("devices") or [])[:lim]
     ]
+
+def _compact_devices(data: dict, lim: int = 100) -> list:
+    """Backward-compatible alias retained for Windows tests/callers."""
+    return _compact(data, lim)
 
 # ── Existing tools ────────────────────────────────────────────────────────────
 

@@ -362,3 +362,6 @@ scan my network and map all devices that you find
 are routed directly to the local AgentPi bridge. AgentPi performs bounded active neighbor discovery plus mDNS, persists discovered devices in its SQLite inventory, and returns the combined map. Shell-based `nmap`/`ip`/`ipconfig` discovery is only a fallback when the AgentPi bridge is unavailable.
 
 Active discovery does not require administrator rights. It warms the OS neighbor table by touching addresses on attached private IPv4 subnets and then reads the native ARP/neighbor table. Windows and Linux ping argument syntax are handled separately.
+
+
+Windows local deployments default the idle Journal checker off to avoid periodic background LLM/database work competing with interactive chat sessions. Set `IDLE_CHAT_CHECKER_ENABLED=true` explicitly in `dish-chat/backend/.env` if you intentionally want that background feature enabled on Windows.

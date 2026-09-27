@@ -31,15 +31,27 @@ def agentpi_health() -> str:
     except Exception as e: return f"AgentPi health check failed: {e}"
 
 @tool("agentpi_discover_devices")
-def agentpi_discover_devices(arp: bool = True, mdns: bool = True, mdns_timeout: float = 2.0) -> str:
-    """Discover local network devices via ARP and/or mDNS.
-    Set arp=False for mDNS-only. Set mdns=False for ARP-only.
-    mdns_timeout: seconds to listen (max 10).
+def agentpi_discover_devices(
+    arp: bool = True,
+    mdns: bool = True,
+    mdns_timeout: float = 2.0,
+    active: bool = False,
+    active_max_hosts: int = 768,
+) -> str:
+    """Discover local network devices via OS-aware ARP and/or mDNS.
+
+    active=True performs a bounded local-subnet neighbor warmup first so the
+    resulting ARP map is more complete. It does not require nmap or admin.
     """
     try:
-        payload = {"arp": bool(arp), "mdns": bool(mdns),
-                   "mdns_timeout": max(0.0, min(float(mdns_timeout), 10.0)),
-                   "lookup_vendors": False}
+        payload = {
+            "arp": bool(arp),
+            "mdns": bool(mdns),
+            "mdns_timeout": max(0.0, min(float(mdns_timeout), 10.0)),
+            "lookup_vendors": False,
+            "active_arp": bool(active),
+            "active_arp_max_hosts": max(1, min(int(active_max_hosts), 1024)),
+        }
         d = _req("POST", "/rest/api/v1/discovery/scan", body=payload,
                  t=max(15.0, payload["mdns_timeout"] + 8.0))
         return json.dumps({"sources": d.get("sources", []), "discovered": d.get("discovered", 0),

@@ -27,6 +27,9 @@ class ScanRequest(BaseModel):
     mdns: bool = True
     mdns_timeout: float = Field(default=2.0, ge=0.0, le=15.0)
     lookup_vendors: bool = False
+    active_arp: bool = False
+    active_arp_max_hosts: int = Field(default=768, ge=1, le=1024)
+    active_arp_timeout: float = Field(default=0.35, ge=0.1, le=2.0)
     rtsp_cidr: Optional[str] = None
     rtsp_concurrency: int = Field(default=12, ge=1, le=64)
     rtsp_max_hosts: int = Field(default=64, ge=1, le=256)
@@ -111,8 +114,13 @@ def create_app() -> FastAPI:
         jobs = []
         labels = []
         if request.arp:
-            jobs.append(scan_arp(lookup_vendors=request.lookup_vendors))
-            labels.append("arp")
+            jobs.append(scan_arp(
+                lookup_vendors=request.lookup_vendors,
+                active_probe=request.active_arp,
+                active_max_hosts=request.active_arp_max_hosts,
+                active_timeout=request.active_arp_timeout,
+            ))
+            labels.append("arp-active" if request.active_arp else "arp")
         if request.mdns:
             jobs.append(discover_mdns_devices_async(timeout=request.mdns_timeout))
             labels.append("mdns")

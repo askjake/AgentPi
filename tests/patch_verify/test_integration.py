@@ -10,18 +10,6 @@ REPO = str(pathlib.Path(__file__).resolve().parents[2])
 sys.path.insert(0, os.path.join(REPO, "dish-chat", "backend"))
 sys.path.insert(1, os.path.join(REPO, "backend"))
 
-PASS = []
-FAIL = []
-
-def check(name, fn):
-    try:
-        fn()
-        PASS.append(name)
-        print(f"  ✓  {name}")
-    except Exception as e:
-        FAIL.append(f"{name}: {e}")
-        print(f"  ✗  {name}: {e}")
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-01 + PATCH-07: host_context TTL cache + self-identity
 # ─────────────────────────────────────────────────────────────────────────────
@@ -44,9 +32,6 @@ def test_host_context():
     hc._CACHE = (0.0, "stale")
     ctx3 = hc.build_host_context()
     assert ctx3 != "stale", "Expired cache not refreshed"
-
-check("PATCH-01+07 host_context self-identity + 60s TTL cache", test_host_context)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-04: 5 new bridge tools present and valid
 # ─────────────────────────────────────────────────────────────────────────────
@@ -81,9 +66,6 @@ def test_bridge_tools():
         assert t is not None, f"{name} missing"
         assert t.name,        f"{name} has no .name"
         assert t.description, f"{name} has no .description"
-
-check("PATCH-04 5 new bridge tools importable with name + description", test_bridge_tools)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-04: registry has >=23 tools including all 5 new
 # ─────────────────────────────────────────────────────────────────────────────
@@ -98,9 +80,6 @@ def test_registry_count():
            "agentpi_homeassistant_stop","agentpi_clear_inventory"}
     missing = new - set(names)
     assert not missing, f"Missing: {missing}"
-
-check("PATCH-04 registry: 23 tools, all 5 new present", test_registry_count)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-05: named constants + truncation marker
 # ─────────────────────────────────────────────────────────────────────────────
@@ -110,9 +89,6 @@ def test_patch05():
     assert "SCRATCHPAD_LIMIT = 8_000"  in src, "SCRATCHPAD_LIMIT missing"
     assert "SUMMARIZER_LIMIT = 16_000" in src, "SUMMARIZER_LIMIT missing"
     assert "TRUNCATED"                 in src, "[TRUNCATED] marker missing"
-
-check("PATCH-05 named constants + truncation marker", test_patch05)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-06: _COVERITY_LLM_TYPES set contains both type strings
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,9 +100,6 @@ def test_patch06():
     body = m.group(1)
     assert "coverity-assist-tool-enabled" in body, "tool-enabled missing"
     assert 'coverity-assist"' in body,             "base type missing"
-
-check("PATCH-06 _COVERITY_LLM_TYPES both values", test_patch06)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-02: _is_mdns_specific + network fast-path guard
 # ─────────────────────────────────────────────────────────────────────────────
@@ -143,9 +116,6 @@ def test_patch02():
     assert     fn("discover using mDNS only"), "mDNS not detected"
     assert     fn("find .local devices"),      ".local not detected"
     assert not fn("list devices using arp"),   "ARP wrongly flagged as mDNS"
-
-check("PATCH-02 _is_mdns_specific + fast-path demotion", test_patch02)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-03: _search_harder short-circuit + fallback_tool
 # ─────────────────────────────────────────────────────────────────────────────
@@ -155,9 +125,6 @@ def test_patch03():
     assert "fallback_tool"    in src, "fallback_tool param missing"
     assert "network_dead"     in src, "network_dead flag missing"
     assert "short-circuiting" in src, "short-circuit log missing"
-
-check("PATCH-03 _search_harder fallback + short-circuit", test_patch03)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-06: coverity_assist_chat_model _llm_type_base alias
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,9 +134,6 @@ def test_patch06_model():
     assert "_llm_type_base"           in src, "_llm_type_base missing"
     assert 'return "coverity-assist"' in src, "base return value missing"
     assert "PATCH-06"                 in src, "PATCH-06 comment missing"
-
-check("PATCH-06 coverity_assist_chat_model _llm_type_base alias", test_patch06_model)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PATCH-08: SQLite store structure
 # ─────────────────────────────────────────────────────────────────────────────
@@ -189,9 +153,6 @@ def test_patch08():
     svc = pathlib.Path(os.path.join(REPO, "deployment/linux/agentpi.service")).read_text()
     assert "StateDirectory=agentpi" in svc, "systemd StateDirectory missing"
     assert "Environment=AGENTPI_DB=/var/lib/agentpi/devices.db" in svc, "systemd AGENTPI_DB override missing"
-
-check("PATCH-08 SQLite store structure + cross-platform persistence path", test_patch08)
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Windows runtime: reserved-port fallback contract
 # ─────────────────────────────────────────────────────────────────────────────
@@ -205,10 +166,6 @@ def test_windows_agentpi_port_fallback():
     assert 'os.environ.get("AGENTPI_URL"' in runner, "DishChat runner ignores selected AgentPi URL"
     assert 'IDLE_CHAT_CHECKER_ENABLED' in runner and '"false"' in runner, "Windows idle checker default-off guard missing"
     assert "agentpi-port.txt" in verify, "verifier does not read selected AgentPi port"
-
-check("Windows AgentPi port fallback contract", test_windows_agentpi_port_fallback)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Backend longevity: streaming responses must not pin request DB sessions
 # ─────────────────────────────────────────────────────────────────────────────
@@ -230,16 +187,14 @@ def test_stream_db_lifetime():
     assert "db_session: DBSessionDep" not in branch_body, "version stream still owns request-scoped DB session"
 
     assert "profile=None, db=None" in usage, "usage tracker still binds DB session to stream callback"
-    assert "persisted afterward with its own short-lived session" in usage, "usage short-session hardening missing"
+    assert "async def _persist_usage_metadata(" in usage, "post-stream usage persistence helper missing"
+    assert "async with get_db_session_ctxmgr() as db:" in usage, "usage persistence does not use a short-lived DB session"
+    assert "await self._persist_usage_metadata(cb, profile)" in usage, "usage metadata is not persisted after the stream"
     assert "_usage_metadata_callback_var" in usage, "module-level usage callback ContextVar missing"
     assert usage.count("register_configure_hook(") == 1, "usage callback hook is registered more than once"
     assert "_usage_metadata_callback_var.reset(token)" in usage, "usage callback token reset missing"
     assert "pool_timeout=" in dbbase and "pool_recycle=" in dbbase and "pool_use_lifo=True" in dbbase, "DB pool hardening missing"
     assert '"/health/db"' in health and "SELECT 1" in health and "pool.status()" in health, "DB readiness diagnostics missing"
-
-check("backend SSE DB-session lifetime + pool hardening", test_stream_db_lifetime)
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Environment-aware network mapping
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,14 +218,33 @@ def test_environment_aware_network_mapping():
     assert "_warm_neighbor_cache" in arp and "_local_ipv4_networks" in arp, "active neighbor warmup missing"
     assert "active_arp: bool = False" in app, "AgentPi API active_arp field missing"
     assert "def _ping_args(" in tools and 'if os.name == "nt"' in tools, "native ping syntax helper missing"
-
-check("environment-aware Windows/network mapping route", test_environment_aware_network_mapping)
-
 # ─────────────────────────────────────────────────────────────────────────────
-print()
-print("=" * 56)
-print(f"  RESULTS: {len(PASS)} passed, {len(FAIL)} failed")
-print("=" * 56)
-if FAIL:
-    raise SystemExit(1)
-print("ALL TESTS PASS")
+def _run_standalone() -> int:
+    tests = [
+        (name, obj)
+        for name, obj in globals().items()
+        if name.startswith("test_") and callable(obj)
+    ]
+    passed = 0
+    failed = []
+    for name, fn in tests:
+        try:
+            fn()
+            passed += 1
+            print(f"  ✓  {name}")
+        except Exception as exc:
+            failed.append(f"{name}: {exc}")
+            print(f"  ✗  {name}: {exc}")
+
+    print()
+    print("=" * 56)
+    print(f"  RESULTS: {passed} passed, {len(failed)} failed")
+    print("=" * 56)
+    if failed:
+        return 1
+    print("ALL TESTS PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_run_standalone())

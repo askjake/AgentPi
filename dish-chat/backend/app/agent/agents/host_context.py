@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, platform, shutil, subprocess, time
+import os, platform, shutil, subprocess, sys, time
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
@@ -32,6 +32,8 @@ def _inner() -> str:
             "You are running natively on Windows.",
             "Do not assume bash, /proc, ip, ifconfig, hostname -I, Linux ping flags, or other Linux-only commands exist.",
             "For local network discovery or mapping, prefer agentpi_discover_devices and agentpi_list_devices; these tools are OS-aware and run on this machine.",
+            "For a specific IP/port connectivity check, use agent_check_device; it uses native Python sockets and does not require nc/netcat.",
+            "For Python code execution, use agent_run_python. Do NOT probe PATH for python, py, python3, or where.exe: the backend already has a working interpreter.",
             "Use agent_run_shell only when a listed Windows-safe command is actually appropriate.",
         ]
     elif wsl:
@@ -46,6 +48,10 @@ def _inner() -> str:
             "You are running on a Linux host environment with shell access.",
             "For local network discovery or mapping, prefer the agentpi_* tools before raw shell commands.",
         ]
+    f.append(f"Current backend Python interpreter: {sys.executable}")
+    f.append(f"Current Python version: {platform.python_version()}")
+    f.append(f"Current process working directory: {os.getcwd()}")
+
     for b, m in [
         ("powershell.exe", "powershell.exe is available."),
         ("cmd.exe",        "cmd.exe is available."),

@@ -218,6 +218,13 @@ def test_environment_aware_network_mapping():
     assert "_warm_neighbor_cache" in arp and "_local_ipv4_networks" in arp, "active neighbor warmup missing"
     assert "active_arp: bool = False" in app, "AgentPi API active_arp field missing"
     assert "def _ping_args(" in tools and 'if os.name == "nt"' in tools, "native ping syntax helper missing"
+    assert "socket.create_connection" in tools, "native TCP port probe missing"
+    assert "python_exec = sys.executable" in tools, "agent_run_python does not reuse current interpreter"
+    assert "python = python_bin or sys.executable" in tools, "agent_create_venv does not reuse current interpreter"
+    assert "Current backend Python interpreter:" in host and "sys.executable" in host, "host context does not expose working Python runtime"
+    assert "def _looks_like_device_probe_request" in loop, "device probe intent detector missing"
+    assert "[FAST-PATH] specific device probe -> agent_check_device" in loop, "device probe fast-path missing"
+    assert "never waste steps probing python/py/python3/where" in loop, "planner Python-runtime guidance missing"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pytest/runtime persistence isolation

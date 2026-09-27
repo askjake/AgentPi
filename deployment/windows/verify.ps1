@@ -17,6 +17,7 @@ Write-Host "AgentPi verify endpoint: http://127.0.0.1:$AgentPiPort"
 $ok = $true
 $ok = (Wait-Http "AgentPi" $AgentPiHealthUrl 3) -and $ok
 $ok = (Wait-Http "DishChat backend" "http://127.0.0.1:8000/rest/api/v1/health" 3) -and $ok
+$ok = (Wait-Http "DishChat DB" "http://127.0.0.1:8000/rest/api/v1/health/db" 3) -and $ok
 $ok = (Wait-Http "DishChat frontend" "http://127.0.0.1:3000/health" 3) -and $ok
 
 Start-AgentPiPostgres $Root

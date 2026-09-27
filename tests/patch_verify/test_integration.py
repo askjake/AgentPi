@@ -203,6 +203,7 @@ def test_windows_agentpi_port_fallback():
     assert "18765" in start and "28765" in start, "fallback port candidates missing"
     assert "Test-LoopbackPortBindable" in start, "bind probe missing"
     assert 'os.environ.get("AGENTPI_URL"' in runner, "DishChat runner ignores selected AgentPi URL"
+    assert 'IDLE_CHAT_CHECKER_ENABLED' in runner and '"false"' in runner, "Windows idle checker default-off guard missing"
     assert "agentpi-port.txt" in verify, "verifier does not read selected AgentPi port"
 
 check("Windows AgentPi port fallback contract", test_windows_agentpi_port_fallback)

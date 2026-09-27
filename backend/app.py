@@ -114,13 +114,20 @@ def create_app() -> FastAPI:
         jobs = []
         labels = []
         if request.arp:
-            jobs.append(scan_arp(
-                lookup_vendors=request.lookup_vendors,
-                active_probe=request.active_arp,
-                active_max_hosts=request.active_arp_max_hosts,
-                active_timeout=request.active_arp_timeout,
-            ))
-            labels.append("arp-active" if request.active_arp else "arp")
+            if request.active_arp:
+                jobs.append(scan_arp(
+                    lookup_vendors=request.lookup_vendors,
+                    active_probe=True,
+                    active_max_hosts=request.active_arp_max_hosts,
+                    active_timeout=request.active_arp_timeout,
+                ))
+                labels.append("arp-active")
+            else:
+                # Preserve the original passive-call contract so existing
+                # integrations/mocks that accept only lookup_vendors continue
+                # to work. Active-only arguments are passed only when requested.
+                jobs.append(scan_arp(lookup_vendors=request.lookup_vendors))
+                labels.append("arp")
         if request.mdns:
             jobs.append(discover_mdns_devices_async(timeout=request.mdns_timeout))
             labels.append("mdns")

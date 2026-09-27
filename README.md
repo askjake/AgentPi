@@ -365,3 +365,12 @@ Active discovery does not require administrator rights. It warms the OS neighbor
 
 
 Windows local deployments default the idle Journal checker off to avoid periodic background LLM/database work competing with interactive chat sessions. Set `IDLE_CHAT_CHECKER_ENABLED=true` explicitly in `dish-chat/backend/.env` if you intentionally want that background feature enabled on Windows.
+
+
+## Native Windows execution semantics
+
+Dish-Agent does not need to discover Python through `PATH` on a Windows deployment. The backend is already running under a known-good interpreter, and `agent_run_python` / `agent_create_venv` reuse `sys.executable` when no workspace venv or explicit interpreter is supplied.
+
+Specific TCP port checks use Python's socket API through `agent_check_device`; they do not depend on `nc`, `netcat`, PowerShell, or other external networking binaries. Missing optional SSH clients are reported as an unavailable capability rather than surfacing `WinError 2`.
+
+Arbitrary PowerShell remains outside the generic `agent_run_shell` allowlist by design. Network discovery, TCP probing, and Python execution have dedicated cross-platform tools and should not fall back to PowerShell or PATH probing.

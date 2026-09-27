@@ -50,8 +50,11 @@ class DatabaseSessionManager:
             url,
             echo=False,
             pool_pre_ping=True,
-            pool_size=10,
-            max_overflow=20,
+            pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
+            max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "20")),
+            pool_timeout=float(os.getenv("DB_POOL_TIMEOUT_SECONDS", "10")),
+            pool_recycle=int(os.getenv("DB_POOL_RECYCLE_SECONDS", "300")),
+            pool_use_lifo=True,
         )
         self.session_maker = async_sessionmaker(
             self.engine,

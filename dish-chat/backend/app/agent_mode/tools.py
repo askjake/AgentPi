@@ -1,6 +1,8 @@
 import os
 import shutil
 import subprocess
+import socket
+import sys
 from pathlib import Path
 from typing import Optional, List, Dict
 import asyncio
@@ -263,7 +265,7 @@ def agent_create_venv(chat_id: str, python_bin: Optional[str] = None) -> str:
     
     Parameters:
       - chat_id: Workspace identifier
-      - python_bin: Python executable to use (default: python3)
+      - python_bin: Python executable to use (default: current backend interpreter)
     
     Returns status of venv creation.
     """
@@ -273,7 +275,7 @@ def agent_create_venv(chat_id: str, python_bin: Optional[str] = None) -> str:
     if venv_dir.exists():
         shutil.rmtree(venv_dir)
     
-    python = python_bin or "python3"
+    python = python_bin or sys.executable
     try:
         result = subprocess.run(
             [python, "-m", "venv", str(venv_dir)],
@@ -329,7 +331,9 @@ def agent_run_python(
     if use_venv and venv_py.exists():
         python_exec = str(venv_py)
     else:
-        python_exec = "python3"
+        # The backend is already running under a known-good Python interpreter.
+        # Use it directly instead of probing PATH/App Execution Aliases.
+        python_exec = sys.executable
     
     try:
         result = subprocess.run(
@@ -563,41 +567,48 @@ def agent_check_device(
             else:
                 output += "❌ Ping: OFFLINE\n\n"
         
-        # Port check
+        # Port check: use Python sockets so this works on Windows/Linux
+        # without requiring nc/netcat/ncat to be installed.
         if check_type in ["port", "all"] and port:
-            nc_result = subprocess.run(
-                ["nc", "-zv", "-w", "2", ip_address, str(port)],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if nc_result.returncode == 0:
-                output += f"✅ Port {port}: OPEN\n\n"
-            else:
-                output += f"❌ Port {port}: CLOSED or FILTERED\n\n"
+            try:
+                port_num = int(port)
+                if not 1 <= port_num <= 65535:
+                    return f"❌ Invalid port: {port}"
+                with socket.create_connection((ip_address, port_num), timeout=2.0):
+                    output += f"✅ Port {port_num}: OPEN\n\n"
+            except (TimeoutError, socket.timeout):
+                output += f"⚠️  Port {port_num}: FILTERED or TIMED OUT\n\n"
+            except OSError as exc:
+                output += f"❌ Port {port_num}: CLOSED or UNREACHABLE ({exc.__class__.__name__})\n\n"
         
-        # SSH check
+        # SSH remains optional. Report an unavailable client cleanly rather
+        # than surfacing FileNotFoundError/WinError 2.
+        ssh_accessible = False
         if check_type in ["ssh", "all"]:
             if not ssh_user:
                 ssh_user = "root"
-            
-            ssh_result = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
-                 f"{ssh_user}@{ip_address}", "echo SSH_OK"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            if "SSH_OK" in ssh_result.stdout:
-                output += f"✅ SSH: Accessible (user: {ssh_user})\n\n"
+            ssh_bin = shutil.which("ssh")
+            if not ssh_bin:
+                output += "⚠️  SSH client is not installed/available on this host.\n\n"
             else:
-                output += f"⚠️  SSH: Not accessible or key auth required\n\n"
-        
-        # System info if SSH accessible
-        if check_type == "all" and ssh_user:
+                ssh_result = subprocess.run(
+                    [ssh_bin, "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+                     f"{ssh_user}@{ip_address}", "echo SSH_OK"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                ssh_accessible = "SSH_OK" in ssh_result.stdout
+                if ssh_accessible:
+                    output += f"✅ SSH: Accessible (user: {ssh_user})\n\n"
+                else:
+                    output += "⚠️  SSH: Not accessible or key auth required\n\n"
+
+        # System info only after SSH was actually proven available.
+        if check_type == "all" and ssh_accessible:
             info_result = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=5", 
-                 f"{ssh_user}@{ip_address}", 
+                [ssh_bin, "-o", "ConnectTimeout=5",
+                 f"{ssh_user}@{ip_address}",
                  "uname -a; uptime"],
                 capture_output=True,
                 text=True,

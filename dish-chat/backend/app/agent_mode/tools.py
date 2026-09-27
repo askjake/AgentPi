@@ -130,6 +130,23 @@ def _validate_cidr(cidr: str) -> bool:
     return 0 <= int(mask) <= 32
 
 
+def _ping_args(ip_address: str, count: int = 1, timeout_seconds: int = 1) -> list[str]:
+    """Return ping arguments appropriate for the native host OS."""
+    if os.name == "nt":
+        return [
+            "ping",
+            "-n", str(max(1, int(count))),
+            "-w", str(max(100, int(timeout_seconds * 1000))),
+            ip_address,
+        ]
+    return [
+        "ping",
+        "-c", str(max(1, int(count))),
+        "-W", str(max(1, int(timeout_seconds))),
+        ip_address,
+    ]
+
+
 def _detect_dangerous_command(command: str) -> Optional[str]:
     """Detect dangerous command patterns."""
     for pattern in BLOCKED_PATTERNS:
@@ -449,7 +466,7 @@ def agent_network_scan(
             for i in range(1, 255):
                 ip = f"{base_ip}.{i}"
                 result = subprocess.run(
-                    ["ping", "-c", "1", "-W", "1", ip],
+                    _ping_args(ip, count=1, timeout_seconds=1),
                     capture_output=True,
                     timeout=2,
                 )
@@ -531,7 +548,7 @@ def agent_check_device(
         # Ping check
         if check_type in ["ping", "all"]:
             ping_result = subprocess.run(
-                ["ping", "-c", "3", "-W", "2", ip_address],
+                _ping_args(ip_address, count=3, timeout_seconds=2),
                 capture_output=True,
                 text=True,
                 timeout=10,

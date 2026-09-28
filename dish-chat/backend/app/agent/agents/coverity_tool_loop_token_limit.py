@@ -653,7 +653,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
         try:
             result = await _invoke_tool(
                 tool_map["public_web_search_status"].raw,
-                {"probe": True},
+                {"probe": False},
                 chat_id=chat_id,
             )
         except Exception as exc:

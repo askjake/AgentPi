@@ -261,8 +261,8 @@ def test_local_public_web_search():
     assert "truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)" in search, "Windows native trust-store TLS context missing"
     assert "CERT_NONE" not in search and "_create_unverified_context" not in search and "verify=False" not in search, "public search must not disable TLS verification"
     assert "def _parse_duckduckgo_results(" in search, "direct-search parser missing"
-    assert "return quote(url, safe=\":/?#@!    assert "def _parse_duckduckgo_results(" in search, "direct-search parser missing"
-'*+,;=%._~-\")" in search, "safe encoded Markdown URL destination missing"
+    expected_safe_url_line = 'return quote(url, safe=":/?#@!$&\'*+,;=%._~-")'
+    assert expected_safe_url_line in search, "safe encoded Markdown URL destination missing"
     assert "_SEARCH_CACHE" in search and "OrderedDict" in search, "bounded read-only search cache missing"
     assert "PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS" in search, "search cache TTL missing"
     assert "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES" in search, "search cache bound missing"

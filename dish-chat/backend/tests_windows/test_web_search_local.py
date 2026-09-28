@@ -412,10 +412,10 @@ def test_deterministic_renderer_emits_clickable_links_and_evidence():
     assert rendered.startswith("## Web search results")
     assert "[Python 3.13 \\[release\\]](https://www.python.org/downloads/release/python-31315/)" in rendered
     assert "Official \\*maintenance\\* release notes." in rendered
-    assert "backend=\`direct\`" in rendered
-    assert "source=\`ddg-lite\`" in rendered
-    assert "TLS=\`windows-cryptoapi-truststore\`" in rendered
-    assert "cache=\`hit\`" in rendered
+    assert "backend=`direct`" in rendered
+    assert "source=`ddg-lite`" in rendered
+    assert "TLS=`windows-cryptoapi-truststore`" in rendered
+    assert "cache=`hit`" in rendered
     assert "Cache age:" in rendered
     assert "ddg-html r1: empty" in rendered
     assert "ddg-lite r1: ok" in rendered
@@ -456,7 +456,7 @@ def test_deterministic_renderer_handles_failure_without_inference():
 
     assert rendered.startswith("## Web search unavailable")
     assert "No usable results after bounded retries." in rendered
-    assert "results=\`0\`" in rendered
+    assert "results=`0`" in rendered
     assert "ddg-html r1: empty" in rendered
     assert "No result links are inferred" not in rendered
 

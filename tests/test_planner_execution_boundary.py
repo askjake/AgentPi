@@ -405,3 +405,36 @@ def test_try_again_reuses_previous_fresh_search_without_model(planner):
     assert "[Retry fixture](https://python.org/)" in answer.content
     assert "cache=\`hit\`" in answer.content
     assert calls == [prior]
+
+
+def test_fresh_search_failure_renders_actual_attempt_evidence(planner):
+    calls = []
+
+    async def search_tool(query):
+        calls.append(query)
+        return json.dumps({
+            "error": "Search failed",
+            "message": "Direct public search returned no usable results after bounded retries.",
+            "query": query,
+            "backend": "direct",
+            "cache": {"hit": False},
+            "attempts": [
+                {"backend": "ddg-html", "round": 1, "status": "empty", "tls_backend": "fixture-tls"},
+                {"backend": "ddg-lite", "round": 1, "status": "empty", "tls_backend": "fixture-tls"},
+            ],
+        })
+
+    tools = [types.SimpleNamespace(name="public_web_search", ainvoke=search_tool)]
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        tools=tools,
+        messages=[Message("search the web for the latest Python 3.13 release notes")],
+        config={"configurable": {"thread_id": "search-failure-render"}},
+    ))
+
+    assert answer.content.startswith("## Web search unavailable")
+    assert "Direct public search returned no usable results after bounded retries." in answer.content
+    assert "backend=\`direct\`" in answer.content
+    assert "ddg-html r1: empty" in answer.content
+    assert "ddg-lite r1: empty" in answer.content
+    assert "no LLM summarization was used" in answer.content
+    assert calls

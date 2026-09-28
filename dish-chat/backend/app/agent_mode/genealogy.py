@@ -303,6 +303,87 @@ def _family_context(
     }
 
 
+def _relationship_anomalies(
+    candidate: dict[str, Any],
+    individuals: dict[str, dict[str, Any]],
+    families: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return conservative chronology anomalies without changing identity status."""
+    anomalies: list[dict[str, Any]] = []
+    candidate_birth = candidate.get("birth_year")
+
+    if candidate_birth is not None:
+        for fid in candidate.get("famc", []):
+            fam = families.get(fid)
+            if not fam:
+                continue
+            for role, rid in (("father", fam.get("husb")), ("mother", fam.get("wife"))):
+                parent = individuals.get(rid) if rid else None
+                if not parent or parent.get("birth_year") is None:
+                    continue
+                age = int(candidate_birth) - int(parent["birth_year"])
+                if age < 12:
+                    anomalies.append({
+                        "type": "parent_too_young",
+                        "severity": "high",
+                        "person_id": candidate.get("id"),
+                        "person_name": candidate.get("name"),
+                        "related_id": parent.get("id"),
+                        "related_name": parent.get("name"),
+                        "relationship": role,
+                        "person_birth_year": candidate_birth,
+                        "related_birth_year": parent.get("birth_year"),
+                        "age_at_event": age,
+                        "message": (
+                            f"{role} {parent.get('name')} would have been age {age} "
+                            f"when {candidate.get('name')} was born"
+                        ),
+                    })
+
+        for fid in candidate.get("fams", []):
+            fam = families.get(fid)
+            if not fam:
+                continue
+            for child_id in fam.get("children", []):
+                child = individuals.get(child_id)
+                if not child or child.get("birth_year") is None:
+                    continue
+                age = int(child["birth_year"]) - int(candidate_birth)
+                if age < 12:
+                    anomalies.append({
+                        "type": "parent_too_young",
+                        "severity": "high",
+                        "person_id": candidate.get("id"),
+                        "person_name": candidate.get("name"),
+                        "related_id": child.get("id"),
+                        "related_name": child.get("name"),
+                        "relationship": "child",
+                        "person_birth_year": candidate_birth,
+                        "related_birth_year": child.get("birth_year"),
+                        "age_at_event": age,
+                        "message": (
+                            f"{candidate.get('name')} would have been age {age} "
+                            f"when child {child.get('name')} was born"
+                        ),
+                    })
+
+    # Stable order and de-duplication.
+    seen: set[tuple[Any, ...]] = set()
+    out: list[dict[str, Any]] = []
+    for item in anomalies:
+        key = (
+            item.get("type"),
+            item.get("person_id"),
+            item.get("related_id"),
+            item.get("age_at_event"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 def _ancestor_context(
     candidate: dict[str, Any],
     individuals: dict[str, dict[str, Any]],
@@ -400,6 +481,11 @@ def inspect_gedcom_identity(
         candidate["name_match"] = name_match
         candidate["conflicts"] = conflicts
         candidate["family"] = _family_context(person, individuals, families)
+        candidate["relationship_anomalies"] = _relationship_anomalies(
+            person,
+            individuals,
+            families,
+        )
         candidate["ancestors"] = _ancestor_context(
             person,
             individuals,

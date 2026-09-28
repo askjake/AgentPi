@@ -106,6 +106,25 @@ def test_lillie_beatrice_is_not_silently_replaced_by_lillie_griffith(workspace):
         {"id": "@I5@", "name": "Lena Montgomery", "birth_year": 1896, "death_year": None}
     ]
 
+    assert candidate["ancestors"] == [
+        {
+            "id": "@I2@",
+            "name": "George W. Griffith",
+            "birth_year": 1843,
+            "death_year": None,
+            "generation": 1,
+            "child_id": "@I1@",
+        },
+        {
+            "id": "@I3@",
+            "name": "Mary E. Crutcher",
+            "birth_year": 1845,
+            "death_year": None,
+            "generation": 1,
+            "child_id": "@I1@",
+        },
+    ]
+
 
 def test_exact_lillie_griffith_identity_can_match(workspace):
     report = genealogy.inspect_gedcom_identity(
@@ -241,3 +260,19 @@ def test_expected_date_missing_from_candidate_is_not_a_match(tmp_path, monkeypat
     assert report["candidates"][0]["conflicts"] == [
         "birth year missing; expected 1923"
     ]
+
+
+
+def test_samuel_identity_match_has_no_branch_ancestry_in_fixture(workspace):
+    report = genealogy.inspect_gedcom_identity(
+        chat_id="chat",
+        target_name="Samuel C. Montgomery",
+        expected_birth_year=1872,
+    )
+
+    assert report["status"] == "match"
+    candidate = report["candidates"][0]
+    assert candidate["id"] == "@I4@"
+    assert candidate["family"]["spouses"][0]["name"] == "Lillie Griffith"
+    assert candidate["family"]["parents"] == []
+    assert candidate["ancestors"] == []

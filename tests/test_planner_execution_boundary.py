@@ -516,6 +516,14 @@ def test_genealogy_identity_gate_detection_is_person_specific(planner):
         "trace the Griffith branch",
         "This is ancestry and family tree research.",
     )
+    assert planner._extract_genealogy_target_name(
+        "The existing analysis identifies Lillie Beatrice Griffith as 1923-1989. Deep dive into her.",
+        context,
+    ) == "Lillie Beatrice Griffith"
+    assert planner._extract_genealogy_target_name(
+        "Separately investigate Samuel C. Montgomery and figure out if he belongs to the main Montgomery branch.",
+        context,
+    ) == "Samuel C. Montgomery"
 
 
 def test_genealogy_final_is_blocked_when_identity_tool_is_not_bound(planner):
@@ -537,6 +545,7 @@ def test_genealogy_final_is_blocked_when_identity_tool_is_not_bound(planner):
     ))
     assert answer.content.startswith("GENEALOGY_IDENTITY_CHECK_REQUIRED:")
     assert "No same/similar-name record was merged" in answer.content
+    assert model.calls == []
 
 
 def test_genealogy_conflicting_candidate_cannot_replace_target(planner):
@@ -568,19 +577,7 @@ def test_genealogy_conflicting_candidate_cannot_replace_target(planner):
             ],
         })
 
-    model = Model([
-        json.dumps({
-            "action": "final",
-            "final": "Here is the full picture: Lillie Griffith was born in 1876.",
-        }),
-        json.dumps({
-            "action": "tool",
-            "tool": "agent_genealogy_identity_check",
-            "input": {
-                "target_name": "Lillie Beatrice Griffith",
-            },
-        }),
-    ])
+    model = Model([])
     answer = asyncio.run(planner.run_coverity_tool_loop(
         model=model,
         tools=[types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=identity_tool)],
@@ -601,7 +598,7 @@ def test_genealogy_conflicting_candidate_cannot_replace_target(planner):
     assert len(identity_calls) == 1
     assert identity_calls[0]["expected_birth_year"] == 1923
     assert identity_calls[0]["expected_death_year"] == 1989
-    assert len(model.calls) == 2
+    assert model.calls == []
 
 
 def test_genealogy_exact_match_allows_grounded_final(planner):
@@ -635,15 +632,6 @@ def test_genealogy_exact_match_allows_grounded_final(planner):
 
     model = Model([
         json.dumps({
-            "action": "tool",
-            "tool": "agent_genealogy_identity_check",
-            "input": {
-                "target_name": "Lillie Griffith",
-                "expected_birth_year": 1876,
-                "expected_death_year": 1948,
-            },
-        }),
-        json.dumps({
             "action": "final",
             "final": "Identity continuity is established for @I7484@. Samuel C. Montgomery is recorded as her spouse; his own ancestry still needs separate tracing.",
         }),
@@ -662,6 +650,7 @@ def test_genealogy_exact_match_allows_grounded_final(planner):
     assert answer.content.startswith("Identity continuity is established")
     assert "Samuel C. Montgomery" in answer.content
     assert len(identity_calls) == 1
+    assert len(model.calls) == 1
 
 
 
@@ -694,20 +683,7 @@ def test_genealogy_branch_membership_needs_ancestor_evidence(planner):
             ],
         })
 
-    model = Model([
-        json.dumps({
-            "action": "tool",
-            "tool": "agent_genealogy_identity_check",
-            "input": {
-                "target_name": "Samuel C. Montgomery",
-                "expected_birth_year": 1872,
-            },
-        }),
-        json.dumps({
-            "action": "final",
-            "final": "Samuel belongs to the main Montgomery branch because his surname is Montgomery.",
-        }),
-    ])
+    model = Model([])
     answer = asyncio.run(planner.run_coverity_tool_loop(
         model=model,
         tools=[types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=identity_tool)],
@@ -723,3 +699,16 @@ def test_genealogy_branch_membership_needs_ancestor_evidence(planner):
     assert "Identity matched: Samuel C. Montgomery [@I4@]" in answer.content
     assert "surname or spouse relationship is not proof of branch membership" in answer.content
     assert "main Montgomery branch because his surname" not in answer.content
+    assert model.calls == []
+
+
+
+def test_genealogy_string_tool_input_is_normalized(planner):
+    payload = planner._normalize_genealogy_identity_input(
+        "Samuel C. Montgomery",
+        fallback_target_name=None,
+        user_text="investigate Samuel C. Montgomery",
+        recent_transcript="This is ancestry research using a GEDCOM family tree.",
+    )
+    assert payload["target_name"] == "Samuel C. Montgomery"
+    assert payload["ancestor_depth"] == 4

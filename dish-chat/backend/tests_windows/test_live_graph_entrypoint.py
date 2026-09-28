@@ -127,3 +127,16 @@ def test_loaded_identity_matches_both_graph_callers(live_graph):
     assert report['chat_binding_matches']
     assert report['agent_mode_binding_matches']
     assert report['loaded_entrypoint_sha256'] == hashlib.sha256(Path(live.__file__).read_bytes()).hexdigest()
+
+
+def test_cached_human_message_still_matches_exact_probe(live_graph):
+    from app.agent.agents import coverity_tool_loop_token_limit as implementation
+    _, _, _, _, _, HumanMessage, _ = live_graph
+    msg = HumanMessage(content=[
+        {"type": "text", "text": PROMPT},
+        {"cachePoint": {"type": "default"}},
+    ])
+    assert implementation._extract_last_user_text([msg]) == PROMPT
+    assert implementation._runtime_probe_payload(
+        implementation._extract_last_user_text([msg])
+    ) is not None

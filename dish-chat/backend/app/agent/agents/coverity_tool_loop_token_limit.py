@@ -387,6 +387,103 @@ def _looks_like_device_probe_request(user_text: str) -> bool:
     )
 
 
+def _looks_like_genealogy_context(user_text: str, recent_transcript: str = "") -> bool:
+    corpus = (user_text + "\n" + recent_transcript).lower()
+    return any(term in corpus for term in [
+        "gedcom", ".ged", "genealogy", "ancestry", "family tree",
+        "family branch", "lineage", "ancestor", "ancestors",
+    ])
+
+
+def _looks_like_genealogy_identity_request(user_text: str, recent_transcript: str = "") -> bool:
+    """Require identity continuity for person-specific genealogy work and short follow-ups."""
+    if not _looks_like_genealogy_context(user_text, recent_transcript):
+        return False
+
+    t = " ".join(user_text.lower().split()).strip(" .!?")
+    person_terms = [
+        "deep dive", "investigate", "figure out if", "who is", "who was",
+        "parents", "father", "mother", "spouse", "husband", "wife",
+        "children", "born", "birth", "died", "death", "same person",
+        "connect", "connection", "belongs", "branch",
+    ]
+    if any(term in t for term in person_terms):
+        return True
+
+    # Follow-ups such as "do it", "go on", or "continue" inherit the genealogy
+    # identity requirement from the recent transcript.
+    if t in {"do it", "go on", "continue", "keep going", "proceed", "yes", "yes do it"}:
+        rt = recent_transcript.lower()
+        return bool(
+            re.search(r"\b(?:born|birth|died|death|parents?|spouse|children|individual|record)\b", rt)
+            and re.search(r"\b[A-Z][a-z]+(?:\s+[A-Z][A-Za-z.\-']+){1,3}\b", recent_transcript)
+        )
+    return False
+
+
+def _genealogy_identity_payload(result: Any) -> dict[str, Any] | None:
+    if isinstance(result, dict):
+        payload = result
+    else:
+        text = _content_to_text(result).strip()
+        start = text.find("{")
+        if start < 0:
+            return None
+        try:
+            payload = json.loads(text[start:])
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("contract") != "agentpi-genealogy-identity-v1":
+        return None
+    return payload
+
+
+def _render_genealogy_identity_block(payload: dict[str, Any]) -> str:
+    target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+    target_name = str(target.get("name") or "requested person")
+    status = str(payload.get("status") or "error")
+    lines = [
+        f"GENEALOGY_IDENTITY_CONTINUITY_{status.upper()}",
+        "",
+        f"Target: {target_name}",
+        (
+            "The GEDCOM identity check did not establish a safe one-person match. "
+            "These identities must remain separate until the conflicting or missing evidence is resolved."
+        ),
+    ]
+    candidates = payload.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        lines.extend(["", "Candidate evidence:"])
+        for candidate in candidates[:5]:
+            if not isinstance(candidate, dict):
+                continue
+            name = candidate.get("name") or candidate.get("id") or "unknown"
+            years = []
+            if candidate.get("birth_year") is not None:
+                years.append(f"b. {candidate.get('birth_year')}")
+            if candidate.get("death_year") is not None:
+                years.append(f"d. {candidate.get('death_year')}")
+            detail = ", ".join(years)
+            line = f"- {name}"
+            if detail:
+                line += f" ({detail})"
+            if candidate.get("id"):
+                line += f" [{candidate.get('id')}]"
+            lines.append(line)
+            conflicts = candidate.get("conflicts")
+            if isinstance(conflicts, list):
+                for conflict in conflicts[:6]:
+                    lines.append(f"  - conflict: {conflict}")
+    lines.extend([
+        "",
+        "No candidate was merged into the target identity. Continue by resolving the cited conflicts, "
+        "or rerun the identity check with better dates/places/source evidence.",
+    ])
+    return "\n".join(lines)
+
+
 def _looks_like_search_diagnostic_request(user_text: str) -> bool:
     t = " ".join(user_text.lower().split())
     phrases = [
@@ -606,6 +703,7 @@ def _build_planner_prompt(user_text: str, recent_transcript: str, system_text: s
         "8. If a tool is needed, respond with one complete JSON object ONLY. A printed tool directive is not execution.",
         "9. Build large artifacts in small verified chunks. Do not put an entire GUI into one tool call; inspect actual API schemas first, then write, parse/compile, and smoke-test files separately.",
         "10. Do not run a persistent GUI mainloop in a bounded Python execution call. Preparing an app, testing it, creating a shortcut, and launching it are distinct operations.",
+        "11. For person-specific genealogy/GEDCOM work, call agent_genealogy_identity_check before identifying a same/similar-name record as the target. Only status=match permits identity continuity. Treat ambiguous/conflict/not_found as separate identities and do not merge them.",
         '{"action":"tool","tool":"TOOL_NAME","input":"TEXT_OR_JSON"}',
         '{"action":"final","final":"YOUR FINAL ANSWER"}',
         "",
@@ -652,6 +750,10 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     recent_transcript = _render_recent_transcript(messages, limit=10)
     system_text = _extract_system_text(messages)
     chat_id = _extract_chat_id(config)
+    genealogy_identity_required = _looks_like_genealogy_identity_request(
+        user_text,
+        recent_transcript,
+    )
 
     if (
         _looks_like_search_diagnostic_request(user_text)
@@ -733,6 +835,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     last_text = ""
     protocol_failures = 0
     returned_tools: list[str] = []
+    genealogy_identity_checked = False
 
     for _ in range(planner_steps):
         planner_prompt = _build_planner_prompt(user_text, recent_transcript, system_text, normalized_tools, scratchpad, chat_id)
@@ -758,6 +861,19 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
             continue
         action = str(payload.get("action", "")).lower().strip()
         if action == "final":
+            if genealogy_identity_required and not genealogy_identity_checked:
+                if "agent_genealogy_identity_check" not in tool_map:
+                    return AIMessage(content=(
+                        "GENEALOGY_IDENTITY_CHECK_REQUIRED: person-specific genealogy conclusions are blocked "
+                        "because agent_genealogy_identity_check is not bound to this conversation. "
+                        "No same/similar-name record was merged into the target identity."
+                    ))
+                scratchpad.append(
+                    "IDENTITY CONTINUITY GATE: before a final genealogy conclusion, call "
+                    "agent_genealogy_identity_check for the person under research. Include known birth/death "
+                    "years when available. Only status=match permits identity continuity."
+                )
+                continue
             return AIMessage(content=str(payload.get("final", "")).strip())
         if action != "tool":
             return AIMessage(content=last_text)
@@ -775,6 +891,18 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
         except Exception as exc:
             result = f"Tool {selected.name} failed: {exc}"
 
+        if selected.name == "agent_genealogy_identity_check":
+            identity_payload = _genealogy_identity_payload(result)
+            if identity_payload is None:
+                return AIMessage(content=(
+                    "GENEALOGY_IDENTITY_CHECK_INVALID: the identity tool did not return its expected "
+                    "agentpi-genealogy-identity-v1 contract. No genealogy identity conclusion is permitted."
+                ))
+            genealogy_identity_checked = True
+            identity_status = str(identity_payload.get("status") or "error")
+            if identity_status != "match":
+                return AIMessage(content=_render_genealogy_identity_block(identity_payload))
+
         if not isinstance(result, str):
             try:
                 result = json.dumps(result, ensure_ascii=False, default=str)
@@ -789,6 +917,11 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
             logger.warning("[SCRATCHPAD] tool=%s truncated %d->%d chars", selected.name, _ol, SCRATCHPAD_LIMIT)
         scratchpad.append(f"Tool used: {selected.name}\nInput: {tool_input}\nResult: {_b}{_mk}")
 
+    if genealogy_identity_required and not genealogy_identity_checked:
+        return AIMessage(content=(
+            "GENEALOGY_IDENTITY_CHECK_REQUIRED: the planning budget ended before a deterministic GEDCOM "
+            "identity check completed. No same/similar-name person was merged into the target identity."
+        ))
     if protocol_failures and not returned_tools:
         return AIMessage(content="PLANNER_PROTOCOL_INVALID: no tool execution result was obtained before the planning budget ended. No completion is claimed.")
     if scratchpad:

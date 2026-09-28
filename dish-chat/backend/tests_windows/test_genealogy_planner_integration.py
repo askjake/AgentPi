@@ -59,22 +59,7 @@ def test_real_planner_blocks_lillie_identity_substitution_from_zipped_gedcom(tmp
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("Jacob Montgomery family tree.ged", _GEDCOM)
 
-    model = FixtureModel([
-        json.dumps({
-            "action": "final",
-            "final": (
-                "Here is the full picture: Lillie Griffith, born 1876, is the "
-                "Lillie Beatrice Griffith you were researching."
-            ),
-        }),
-        json.dumps({
-            "action": "tool",
-            "tool": "agent_genealogy_identity_check",
-            "input": {
-                "target_name": "Lillie Beatrice Griffith",
-            },
-        }),
-    ])
+    model = FixtureModel([])
 
     answer = asyncio.run(run_coverity_tool_loop(
         model=model,
@@ -95,4 +80,36 @@ def test_real_planner_blocks_lillie_identity_substitution_from_zipped_gedcom(tmp
     assert "birth year differs: 1876 != 1923" in answer.content
     assert "death year differs: 1948 != 1989" in answer.content
     assert "No candidate was merged into the target identity." in answer.content
-    assert len(model.calls) == 2
+    assert model.calls == []
+
+
+
+def test_real_planner_returns_lineage_unresolved_for_samuel_without_famc(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_MODE_WORKDIR", str(tmp_path))
+    ws = tmp_path / "samuel-chat" / "ancestry"
+    ws.mkdir(parents=True)
+    archive_path = ws / "Jacob Montgomery family tree.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("Jacob Montgomery family tree.ged", _GEDCOM)
+
+    model = FixtureModel([])
+    answer = asyncio.run(run_coverity_tool_loop(
+        model=model,
+        tools=get_tools_set("agent_mode"),
+        messages=[
+            HumanMessage(content="This is ancestry research using a GEDCOM family tree."),
+            HumanMessage(
+                content=(
+                    "Separately investigate Samuel C. Montgomery and figure out whether he belongs "
+                    "to the main Griffith branch or the main Montgomery branch."
+                )
+            ),
+        ],
+        config={"configurable": {"thread_id": "samuel-chat"}},
+        max_steps=3,
+    ))
+
+    assert answer.content.startswith("GENEALOGY_LINEAGE_EVIDENCE_REQUIRED")
+    assert "Identity matched: Samuel C. Montgomery [@I2@]" in answer.content
+    assert "surname or spouse relationship is not proof of branch membership" in answer.content
+    assert model.calls == []

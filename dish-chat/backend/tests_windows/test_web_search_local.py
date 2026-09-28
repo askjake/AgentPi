@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from app.agent.agents import search_renderer
 from app.tools import web_search
 
 
@@ -407,7 +408,7 @@ def test_deterministic_renderer_emits_clickable_links_and_evidence():
         ],
     }
 
-    rendered = web_search.render_public_search_payload(payload)
+    rendered = search_renderer.render_public_search_payload(payload)
 
     assert rendered.startswith("## Web search results")
     assert "[Python 3.13 \\[release\\]](https://www.python.org/downloads/release/python-31315/)" in rendered
@@ -423,7 +424,7 @@ def test_deterministic_renderer_emits_clickable_links_and_evidence():
 
 
 def test_deterministic_renderer_rejects_unsafe_result_url():
-    rendered = web_search.render_public_search_payload({
+    rendered = search_renderer.render_public_search_payload({
         "query": "fixture",
         "backend": "direct",
         "source": "fixture",
@@ -442,7 +443,7 @@ def test_deterministic_renderer_rejects_unsafe_result_url():
 
 
 def test_deterministic_renderer_handles_failure_without_inference():
-    rendered = web_search.render_public_search_payload({
+    rendered = search_renderer.render_public_search_payload({
         "query": "fixture failure",
         "backend": "direct",
         "cache": {"hit": False},
@@ -462,7 +463,7 @@ def test_deterministic_renderer_handles_failure_without_inference():
 
 
 def test_deterministic_renderer_fails_closed_on_malformed_payload():
-    rendered = web_search.render_public_search_output(
+    rendered = search_renderer.render_public_search_output(
         "Query: fixture\n{not-json",
         requested_query="fixture",
     )

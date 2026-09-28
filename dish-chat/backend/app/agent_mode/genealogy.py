@@ -332,13 +332,17 @@ def inspect_gedcom_identity(
             continue
 
         conflicts = list(reasons)
-        if expected_birth_year is not None and person.get("birth_year") is not None:
-            if int(person["birth_year"]) != int(expected_birth_year):
+        if expected_birth_year is not None:
+            if person.get("birth_year") is None:
+                conflicts.append(f"birth year missing; expected {int(expected_birth_year)}")
+            elif int(person["birth_year"]) != int(expected_birth_year):
                 conflicts.append(
                     f"birth year differs: {person['birth_year']} != {int(expected_birth_year)}"
                 )
-        if expected_death_year is not None and person.get("death_year") is not None:
-            if int(person["death_year"]) != int(expected_death_year):
+        if expected_death_year is not None:
+            if person.get("death_year") is None:
+                conflicts.append(f"death year missing; expected {int(expected_death_year)}")
+            elif int(person["death_year"]) != int(expected_death_year):
                 conflicts.append(
                     f"death year differs: {person['death_year']} != {int(expected_death_year)}"
                 )

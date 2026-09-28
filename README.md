@@ -374,3 +374,12 @@ Dish-Agent does not need to discover Python through `PATH` on a Windows deployme
 Specific TCP port checks use Python's socket API through `agent_check_device`; they do not depend on `nc`, `netcat`, PowerShell, or other external networking binaries. Missing optional SSH clients are reported as an unavailable capability rather than surfacing `WinError 2`.
 
 Arbitrary PowerShell remains outside the generic `agent_run_shell` allowlist by design. Network discovery, TCP probing, and Python execution have dedicated cross-platform tools and should not fall back to PowerShell or PATH probing.
+
+
+## Local public web search
+
+Portable/local AgentPi installs do not start the historical Coverity gateway on `127.0.0.1:5000`. Public web search therefore defaults to a direct local-client path on Windows: DuckDuckGo's non-JavaScript HTML endpoint first, then Lite as a fallback. The query sanitizer still blocks credentials, employee/company addresses, and private IPs before any public request is made.
+
+Search mode is controlled by `PUBLIC_WEB_SEARCH_MODE=auto|direct|gateway`. In `auto`, `LOCAL=true` selects direct search; non-local deployments preserve gateway mode. Windows installation writes `PUBLIC_WEB_SEARCH_MODE=direct` explicitly.
+
+Use `public_web_search_status` or `GET /rest/api/v1/health/search?probe=true` to distinguish search-backend availability from general host connectivity. The Windows execution-boundary qualification performs the live probe after restart.

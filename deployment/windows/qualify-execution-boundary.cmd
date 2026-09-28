@@ -20,6 +20,7 @@ if errorlevel 1 goto failed
 echo === PYTHON SOURCE SYNTAX ===
 .venv-windows\Scripts\python.exe -m py_compile ^
   dish-chat\backend\app\tools\web_search.py ^
+  dish-chat\backend\app\agent_mode\genealogy.py ^
   dish-chat\backend\app\agent\agents\search_renderer.py ^
   dish-chat\backend\app\agent\agents\coverity_tool_loop_token_limit.py
 if errorlevel 1 goto failed

@@ -4,7 +4,7 @@ from typing import Dict, List
 from langchain_core.tools import BaseTool
 from app.config import get_settings
 from app.agent.agents.utils import get_mcp_tools
-from app.tools.web_search import public_web_search
+from app.tools.web_search import public_web_search, public_web_search_status
 from app.tools.internal_search import internal_search
 from app.tools.agentpi_bridge import (
     agentpi_health, agentpi_discover_devices, agentpi_list_devices,
@@ -33,7 +33,7 @@ if getattr(settings, "ENABLE_INTERNAL_TOOLS_MCP", False):
     _ATF["internal_tools"] = lambda: get_mcp_tools(settings.INTERNAL_TOOLS_MCP_CONFIG)
 
 _TF.update({
-    "search": lambda: [public_web_search, internal_search],
+    "search": lambda: [public_web_search, public_web_search_status, internal_search],
     "agent_mode": lambda: [
         # AgentPi bridge — preferred for all device/discovery ops (calls localhost:8765)
         agentpi_health,

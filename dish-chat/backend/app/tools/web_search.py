@@ -14,7 +14,7 @@ from collections import OrderedDict
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
 
 import httpx
@@ -172,7 +172,10 @@ def _safe_public_url(value: Any) -> str | None:
         return None
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
+    return quote(url, safe=":/?#@!    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
     return url
+'*+,;=%._~-")
 
 
 def _render_attempts(attempts: Any) -> str | None:

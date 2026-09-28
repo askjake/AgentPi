@@ -410,6 +410,12 @@ def _looks_like_genealogy_identity_request(user_text: str, recent_transcript: st
     if any(term in t for term in person_terms):
         return True
 
+    if (
+        re.search(r"\b(?:dig deeper|look into|research|trace|verify|resolve|identify)\b", user_text, re.I)
+        and re.search(r"\b[A-Z][a-z]+(?:\s+(?:[A-Z]\.|[A-Z][A-Za-z.\-']+)){1,3}\b", user_text)
+    ):
+        return True
+
     # Follow-ups such as "do it", "go on", or "continue" inherit the genealogy
     # identity requirement from the recent transcript.
     if t in {"do it", "go on", "continue", "keep going", "proceed", "yes", "yes do it"}:

@@ -257,6 +257,8 @@ def test_local_public_web_search():
     assert 'PUBLIC_WEB_SEARCH_MODE" "direct"' in installer, "Windows installer does not select direct search"
     assert "html.duckduckgo.com/html/" in search and "lite.duckduckgo.com/lite/" in search, "direct search backends missing"
     assert "def _fetch_direct_page(" in search and "urlopen(" in search, "native urllib direct-search transport missing"
+    assert "truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)" in search, "Windows native trust-store TLS context missing"
+    assert "CERT_NONE" not in search and "_create_unverified_context" not in search and "verify=False" not in search, "public search must not disable TLS verification"
     assert "def _parse_duckduckgo_results(" in search, "direct-search parser missing"
     assert '@tool("public_web_search_status")' in search, "search diagnostics tool missing"
     assert "public_web_search_status" in registry, "search diagnostics tool is not registered"

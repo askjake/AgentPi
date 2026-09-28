@@ -505,6 +505,10 @@ def test_genealogy_identity_gate_detection_is_person_specific(planner):
         context,
     )
     assert planner._looks_like_genealogy_identity_request(
+        "dig deeper into Benjamin Lawson Maddox",
+        context,
+    )
+    assert planner._looks_like_genealogy_identity_request(
         "do it",
         context + " Individual record and parents need verification.",
     )
@@ -574,8 +578,6 @@ def test_genealogy_conflicting_candidate_cannot_replace_target(planner):
             "tool": "agent_genealogy_identity_check",
             "input": {
                 "target_name": "Lillie Beatrice Griffith",
-                "expected_birth_year": 1923,
-                "expected_death_year": 1989,
             },
         }),
     ])
@@ -597,6 +599,8 @@ def test_genealogy_conflicting_candidate_cannot_replace_target(planner):
     assert "birth year differs: 1876 != 1923" in answer.content
     assert "No candidate was merged into the target identity." in answer.content
     assert len(identity_calls) == 1
+    assert identity_calls[0]["expected_birth_year"] == 1923
+    assert identity_calls[0]["expected_death_year"] == 1989
     assert len(model.calls) == 2
 
 

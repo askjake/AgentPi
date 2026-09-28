@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 
+import pytest
+
 from app.tools import web_search
 
 
@@ -25,6 +27,18 @@ _LITE_RESULT = """
 </table>
 </body></html>
 """
+
+
+@pytest.fixture(autouse=True)
+def _reset_search_state(monkeypatch):
+    with web_search._SEARCH_CACHE_LOCK:
+        web_search._SEARCH_CACHE.clear()
+    web_search._LAST_DIRECT_FETCH_MONOTONIC = 0.0
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS", 120.0)
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES", 64)
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_MIN_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_EMPTY_RETRY_SECONDS", 0.0)
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_EMPTY_RETRIES", 1)
 
 
 def test_duckduckgo_html_parser_decodes_redirect_and_snippet():
@@ -72,9 +86,10 @@ def test_direct_search_falls_back_from_html_to_lite(monkeypatch):
     assert data["source"] == "ddg-lite"
     assert data["results"][0]["url"] == "https://example.org/beta"
     assert data["tls_backend"] == "fixture-tls"
+    assert data["cache"]["hit"] is False
     assert data["attempts"] == [
-        {"backend": "ddg-html", "status": "empty", "tls_backend": "fixture-tls"},
-        {"backend": "ddg-lite", "status": "ok", "tls_backend": "fixture-tls"},
+        {"backend": "ddg-html", "round": 1, "status": "empty", "tls_backend": "fixture-tls"},
+        {"backend": "ddg-lite", "round": 1, "status": "ok", "tls_backend": "fixture-tls"},
     ]
     assert [call[1] for call in calls] == ["fixture query", "fixture query"]
     assert [call[2] for call in calls] == ["us-en", "us-en"]
@@ -222,3 +237,70 @@ def test_windows_tls_context_prefers_truststore(monkeypatch):
     assert context is fixture_context
     assert backend == "windows-cryptoapi-truststore"
     assert created == [web_search.ssl.PROTOCOL_TLS_CLIENT]
+
+
+def test_successful_search_is_cached_and_second_call_avoids_fetch(monkeypatch):
+    calls = []
+
+    def fake_fetch(url, query, region, timeout):
+        calls.append((url, query))
+        return _HTML_RESULT, "fixture-tls"
+
+    monkeypatch.setattr(web_search, "_fetch_direct_page", fake_fetch)
+
+    first = asyncio.run(web_search._direct_search("cached fixture", 3))
+    second = asyncio.run(web_search._direct_search("cached fixture", 3))
+
+    assert first["cache"]["hit"] is False
+    assert second["cache"]["hit"] is True
+    assert second["results"] == first["results"]
+    assert len(calls) == 1
+
+
+def test_empty_results_retry_once_then_succeed(monkeypatch):
+    pages = iter([
+        "<html><body>empty html</body></html>",
+        "<html><body>empty lite</body></html>",
+        _HTML_RESULT,
+    ])
+    calls = []
+
+    def fake_fetch(url, query, region, timeout):
+        calls.append(url)
+        return next(pages), "fixture-tls"
+
+    monkeypatch.setattr(web_search, "_fetch_direct_page", fake_fetch)
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_EMPTY_RETRIES", 1)
+
+    data = asyncio.run(web_search._direct_search("retry fixture", 2))
+
+    assert data["results"][0]["url"] == "https://example.com/alpha"
+    assert len(calls) == 3
+    assert [(a["round"], a["status"]) for a in data["attempts"]] == [
+        (1, "empty"),
+        (1, "empty"),
+        (2, "ok"),
+    ]
+
+
+def test_search_cache_is_bounded(monkeypatch):
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES", 2)
+
+    for index in range(3):
+        web_search._cache_put(
+            f"query {index}",
+            1,
+            "us-en",
+            {
+                "query": f"query {index}",
+                "backend": "direct",
+                "source": "fixture",
+                "results": [{"title": str(index), "url": f"https://example.com/{index}", "snippet": ""}],
+            },
+        )
+
+    snapshot = web_search._cache_snapshot()
+    assert snapshot["entries"] == 2
+    assert snapshot["max_entries"] == 2
+    assert web_search._cache_get("query 0", 1, "us-en") is None
+    assert web_search._cache_get("query 2", 1, "us-en")["cache"]["hit"] is True

@@ -33,6 +33,9 @@ _LITE_RESULT = """
 def _reset_search_state(monkeypatch):
     with web_search._SEARCH_CACHE_LOCK:
         web_search._SEARCH_CACHE.clear()
+    with web_search._OBSERVATION_LOCK:
+        web_search._LAST_SUCCESS = None
+        web_search._LAST_FAILURE = None
     web_search._LAST_DIRECT_FETCH_MONOTONIC = 0.0
     monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS", 120.0)
     monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES", 64)
@@ -304,3 +307,81 @@ def test_search_cache_is_bounded(monkeypatch):
     assert snapshot["max_entries"] == 2
     assert web_search._cache_get("query 0", 1, "us-en") is None
     assert web_search._cache_get("query 2", 1, "us-en")["cache"]["hit"] is True
+
+
+def test_passive_status_does_not_generate_search_traffic(monkeypatch):
+    calls = []
+
+    async def forbidden(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise AssertionError("passive status must not search")
+
+    monkeypatch.setattr(web_search, "_perform_search", forbidden)
+    report = asyncio.run(web_search.public_web_search_status.coroutine(probe=False))
+    payload = json.loads(report)
+
+    assert payload["diagnostic_mode"] == "passive_observation"
+    assert payload["status"] == "unknown"
+    assert payload["last_success"] is None
+    assert payload["last_failure"] is None
+    assert calls == []
+
+
+def test_real_search_success_updates_passive_observed_health(monkeypatch):
+    async def fake_direct(query, max_results):
+        return {
+            "query": query,
+            "backend": "direct",
+            "source": "ddg-lite",
+            "tls_backend": "fixture-tls",
+            "cache": {"hit": False},
+            "results": [{"title": "ok", "url": "https://example.com", "snippet": ""}],
+        }
+
+    monkeypatch.setattr(web_search, "_direct_search", fake_direct)
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_MODE", "direct")
+
+    result = asyncio.run(web_search._perform_search("real user query", 3))
+    assert result["results"]
+
+    status = web_search.search_runtime_status()
+    assert status["status"] == "healthy"
+    assert status["last_success"]["result_count"] == 1
+    assert status["last_success"]["source"] == "ddg-lite"
+    assert status["last_success"]["error"] is None
+    assert status["last_failure"] is None
+    assert "real user query" not in json.dumps(status)
+
+
+def test_transient_failure_after_recent_success_reports_degraded(monkeypatch):
+    results = iter([
+        {
+            "query": "first",
+            "backend": "direct",
+            "source": "ddg-lite",
+            "tls_backend": "fixture-tls",
+            "cache": {"hit": False},
+            "results": [{"title": "ok", "url": "https://example.com", "snippet": ""}],
+        },
+        {
+            "error": "Search failed",
+            "message": "fixture transient empty",
+            "backend": "direct",
+            "cache": {"hit": False},
+            "attempts": [],
+        },
+    ])
+
+    async def fake_direct(query, max_results):
+        return next(results)
+
+    monkeypatch.setattr(web_search, "_direct_search", fake_direct)
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_MODE", "direct")
+
+    asyncio.run(web_search._perform_search("first", 1))
+    asyncio.run(web_search._perform_search("second", 1))
+
+    status = web_search.search_runtime_status()
+    assert status["status"] == "degraded"
+    assert status["last_success"]["result_count"] == 1
+    assert status["last_failure"]["error"] == "fixture transient empty"

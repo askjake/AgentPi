@@ -46,6 +46,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File deployment\windows\verify.ps
 if errorlevel 1 goto failed
 .venv-windows\Scripts\python.exe deployment\windows\verify-live-planner.py
 if errorlevel 1 goto failed
+.venv-windows\Scripts\python.exe deployment\windows\verify-web-search.py
+if errorlevel 1 goto failed
 
 :passed
 echo EXECUTION_BOUNDARY_QUALIFICATION_PASS

@@ -383,3 +383,10 @@ Portable/local AgentPi installs do not start the historical Coverity gateway on 
 Search mode is controlled by `PUBLIC_WEB_SEARCH_MODE=auto|direct|gateway`. In `auto`, `LOCAL=true` selects direct search; non-local deployments preserve gateway mode. Windows installation writes `PUBLIC_WEB_SEARCH_MODE=direct` explicitly.
 
 Use `public_web_search_status` or `GET /rest/api/v1/health/search?probe=true` to distinguish search-backend availability from general host connectivity. The Windows execution-boundary qualification performs the live probe after restart.
+
+
+### Deterministic search rendering
+
+Fresh public-search results remain structured JSON inside the tool boundary, but the chat planner renders that verified payload into Markdown without a second LLM pass. The renderer preserves result titles, validated HTTP(S) links, snippets, backend/source/TLS/cache evidence, and bounded provider-attempt receipts. Result text is Markdown-escaped and link destinations are validated/encoded before display.
+
+Malformed/non-JSON search output fails closed with no inferred links. Structured search failures render their actual backend and attempt evidence instead of being replaced by generic planner prose.

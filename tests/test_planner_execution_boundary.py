@@ -309,3 +309,28 @@ def test_cachepoint_metadata_is_not_user_text(planner):
     assert planner._content_to_text(content) == PROMPT
     assert planner._extract_last_user_text([Message(content)]) == PROMPT
     assert planner._runtime_probe_payload(planner._content_to_text(content)) is not None
+
+
+def test_search_diagnostic_uses_status_tool_without_provider(planner):
+    calls = []
+
+    async def status_tool(payload):
+        calls.append(payload)
+        return json.dumps({
+            "status": "healthy",
+            "configured_mode": "direct",
+            "effective_mode": "direct",
+            "probe": {"ok": True, "backend": "direct", "source": "ddg-html", "result_count": 1},
+        })
+
+    tools = [types.SimpleNamespace(name="public_web_search_status", ainvoke=status_tool)]
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        tools=tools,
+        messages=[Message("diagnose your search tool first")],
+        config={"configurable": {"thread_id": "search-diagnostic"}},
+    ))
+
+    assert "Public web search diagnostics (actual runtime output)" in answer.content
+    assert '"effective_mode": "direct"' in answer.content
+    assert '"source": "ddg-html"' in answer.content
+    assert calls == [{"probe": True}]

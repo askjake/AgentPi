@@ -362,8 +362,11 @@ def test_fresh_search_returns_actual_tool_output_without_model(planner):
         config={"configurable": {"thread_id": "search-grounding"}},
     ))
 
-    assert answer.content.startswith("Public web search result (actual tool output):")
-    assert "https://docs.python.org/3.13/" in answer.content
+    assert answer.content.startswith("## Web search results")
+    assert "[Python 3.13 fixture](https://docs.python.org/3.13/)" in answer.content
+    assert "backend=\`direct\`" in answer.content
+    assert "source=\`ddg-lite\`" in answer.content
+    assert "no LLM summarization was used" in answer.content
     assert "All connection attempts failed" not in answer.content
     assert calls == ["search the web for the latest Python 3.13 release notes and give me the source links"]
 
@@ -398,6 +401,7 @@ def test_try_again_reuses_previous_fresh_search_without_model(planner):
         config={"configurable": {"thread_id": "search-retry"}},
     ))
 
-    assert answer.content.startswith("Public web search result (actual tool output):")
-    assert "https://python.org/" in answer.content
+    assert answer.content.startswith("## Web search results")
+    assert "[Retry fixture](https://python.org/)" in answer.content
+    assert "cache=\`hit\`" in answer.content
     assert calls == [prior]

@@ -284,6 +284,11 @@ class Settings(BaseSettings):
     PUBLIC_WEB_SEARCH_MODE: Literal["auto", "direct", "gateway"] = "auto"
     PUBLIC_WEB_SEARCH_TIMEOUT_SECONDS: float = 20.0
     PUBLIC_WEB_SEARCH_REGION: str = "us-en"
+    PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS: float = 120.0
+    PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES: int = 64
+    PUBLIC_WEB_SEARCH_MIN_INTERVAL_SECONDS: float = 0.75
+    PUBLIC_WEB_SEARCH_EMPTY_RETRY_SECONDS: float = 1.25
+    PUBLIC_WEB_SEARCH_EMPTY_RETRIES: int = 1
 
     # -------------------------------------------------------------------------
     # SENTRY INTEGRATION - VERIFIED ✅

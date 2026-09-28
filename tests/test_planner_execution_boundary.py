@@ -50,7 +50,13 @@ def planner(monkeypatch):
     # External model imports are replaced, not any routing/parser/tool functions.
     source_path = Path(os.environ.get("AGENTPI_PLANNER_TEST_SOURCE", str(PLANNER)))
     tree = ast.parse(source_path.read_text(encoding="utf-8"), str(source_path))
-    excluded = {"langchain_core.messages", "app.core.llm", "app.core.llm.coverity_assist_chat_model", "host_context"}
+    excluded = {
+        "langchain_core.messages",
+        "app.core.llm",
+        "app.core.llm.coverity_assist_chat_model",
+        "app.tools.web_search",
+        "host_context",
+    }
     tree.body = [n for n in tree.body if not (isinstance(n, ast.ImportFrom) and n.module in excluded)]
     module = types.ModuleType("_agentpi_planner_boundary_under_test")
     module.__file__ = str(source_path)
@@ -59,10 +65,58 @@ def planner(monkeypatch):
     def unexpected_provider():
         raise AssertionError("local diagnostic must not construct a provider")
 
+    def render_public_search_output(raw, requested_query=""):
+        if isinstance(raw, str):
+            start = raw.find("{")
+            try:
+                payload = json.loads(raw[start:]) if start >= 0 else {}
+            except json.JSONDecodeError:
+                payload = {}
+        elif isinstance(raw, dict):
+            payload = raw
+        else:
+            payload = {}
+
+        results = payload.get("results") if isinstance(payload.get("results"), list) else []
+        backend = payload.get("backend") or "unknown"
+        source = payload.get("source") or "none"
+        cache = payload.get("cache") if isinstance(payload.get("cache"), dict) else {}
+        if results:
+            lines = ["## Web search results", ""]
+            for item in results:
+                title = item.get("title") or "Untitled result"
+                url = item.get("url") or ""
+                snippet = item.get("snippet") or ""
+                lines.append(f"[{title}]({url})" if url else str(title))
+                if snippet:
+                    lines.append(str(snippet))
+            lines.extend([
+                "",
+                f"backend=`{backend}` source=`{source}` cache=`{'hit' if cache.get('hit') else 'miss'}`",
+                "Rendered deterministically from the actual search-tool payload; no LLM summarization was used.",
+            ])
+            return "\n".join(lines)
+
+        message = payload.get("message") or payload.get("error") or "No usable search results were returned."
+        attempts = payload.get("attempts") if isinstance(payload.get("attempts"), list) else []
+        attempt_text = " ".join(
+            f"{a.get('backend')} r{a.get('round')}: {a.get('status')}"
+            for a in attempts if isinstance(a, dict)
+        )
+        return "\n".join([
+            "## Web search unavailable",
+            "",
+            str(message),
+            f"backend=`{backend}`",
+            attempt_text,
+            "Rendered deterministically from the actual search-tool payload; no LLM summarization was used.",
+        ])
+
     module.__dict__.update(
         AIMessage=Message, HumanMessage=Message, BaseMessage=Message,
         CoverityAssistChatModel=Model, get_model=unexpected_provider,
         build_host_context=lambda: "Controlled test host context; no external probes.",
+        render_public_search_output=render_public_search_output,
     )
     exec(compile(tree, str(source_path), "exec"), module.__dict__)
     return module
@@ -364,8 +418,8 @@ def test_fresh_search_returns_actual_tool_output_without_model(planner):
 
     assert answer.content.startswith("## Web search results")
     assert "[Python 3.13 fixture](https://docs.python.org/3.13/)" in answer.content
-    assert "backend=\`direct\`" in answer.content
-    assert "source=\`ddg-lite\`" in answer.content
+    assert "backend=`direct`" in answer.content
+    assert "source=`ddg-lite`" in answer.content
     assert "no LLM summarization was used" in answer.content
     assert "All connection attempts failed" not in answer.content
     assert calls == ["search the web for the latest Python 3.13 release notes and give me the source links"]
@@ -403,7 +457,7 @@ def test_try_again_reuses_previous_fresh_search_without_model(planner):
 
     assert answer.content.startswith("## Web search results")
     assert "[Retry fixture](https://python.org/)" in answer.content
-    assert "cache=\`hit\`" in answer.content
+    assert "cache=`hit`" in answer.content
     assert calls == [prior]
 
 
@@ -433,7 +487,7 @@ def test_fresh_search_failure_renders_actual_attempt_evidence(planner):
 
     assert answer.content.startswith("## Web search unavailable")
     assert "Direct public search returned no usable results after bounded retries." in answer.content
-    assert "backend=\`direct\`" in answer.content
+    assert "backend=`direct`" in answer.content
     assert "ddg-html r1: empty" in answer.content
     assert "ddg-lite r1: empty" in answer.content
     assert "no LLM summarization was used" in answer.content

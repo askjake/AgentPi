@@ -172,10 +172,9 @@ def _safe_public_url(value: Any) -> str | None:
         return None
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         return None
-    return quote(url, safe=":/?#@!    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        return None
-    return url
-'*+,;=%._~-")
+    # Encode Markdown-delimiter characters in the destination while retaining
+    # ordinary URL syntax. Certificate/TLS behavior is unaffected.
+    return quote(url, safe=":/?#@!$&'*+,;=%._~-")
 
 
 def _render_attempts(attempts: Any) -> str | None:

@@ -77,7 +77,8 @@ def test_registry_count():
     names = re.findall(r'\b(agentpi_\w+|agent_\w+)\b', m.group(1))
     assert len(names) >= 23, f"{len(names)} tools (want >=23)"
     new = {"agentpi_mqtt_start","agentpi_mqtt_stop","agentpi_homeassistant_start",
-           "agentpi_homeassistant_stop","agentpi_clear_inventory"}
+           "agentpi_homeassistant_stop","agentpi_clear_inventory",
+           "agent_genealogy_identity_check"}
     missing = new - set(names)
     assert not missing, f"Missing: {missing}"
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,6 +240,33 @@ def test_pytest_persistent_inventory_isolation():
     passive = app[app.index("if request.active_arp:"):app.index("if request.mdns:")]
     assert "jobs.append(scan_arp(lookup_vendors=request.lookup_vendors))" in passive, "passive scan_arp compatibility call missing"
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Genealogy identity continuity: same/similar names cannot be silently merged
+# ─────────────────────────────────────────────────────────────────────────────
+def test_genealogy_identity_continuity_contract():
+    genealogy = pathlib.Path(os.path.join(
+        REPO, "dish-chat/backend/app/agent_mode/genealogy.py"
+    )).read_text()
+    registry = pathlib.Path(os.path.join(
+        REPO, "dish-chat/backend/app/agent/agents/tools/registry.py"
+    )).read_text()
+    loop = pathlib.Path(os.path.join(
+        REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py"
+    )).read_text()
+
+    ast.parse(genealogy, filename="dish-chat/backend/app/agent_mode/genealogy.py")
+    assert "agentpi-genealogy-identity-v1" in genealogy, "genealogy identity contract missing"
+    assert "def inspect_gedcom_identity(" in genealogy, "deterministic GEDCOM identity resolver missing"
+    assert '@tool("agent_genealogy_identity_check")' in genealogy, "genealogy identity tool missing"
+    assert "Only status=match permits treating a GEDCOM candidate as the target person" in genealogy, "identity continuity rule missing"
+    assert "GEDCOM path must stay inside the conversation workspace" in genealogy, "genealogy workspace boundary missing"
+    assert "agent_genealogy_identity_check" in registry, "genealogy identity tool is not registered"
+    assert "def _looks_like_genealogy_identity_request" in loop, "genealogy identity gate detector missing"
+    assert "GENEALOGY_IDENTITY_CHECK_REQUIRED" in loop, "genealogy final-answer gate missing"
+    assert "GENEALOGY_IDENTITY_CONTINUITY_" in loop, "deterministic conflict renderer missing"
+    assert 'selected.name == "agent_genealogy_identity_check"' in loop, "genealogy identity result enforcement missing"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

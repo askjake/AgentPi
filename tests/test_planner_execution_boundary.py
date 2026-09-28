@@ -299,3 +299,13 @@ def test_action_case_ids_are_bounded_without_reducing_payloads():
     oversized = payloads[ids.index("oversized-payload")]
     assert oversized == '{"action":"tool","tool":"x","input":{"code":"' + ('x' * 66_000)
     assert len(oversized) > 65_536  # Still exercises the production size guard.
+
+
+def test_cachepoint_metadata_is_not_user_text(planner):
+    content = [
+        {"type": "text", "text": PROMPT},
+        {"cachePoint": {"type": "default"}},
+    ]
+    assert planner._content_to_text(content) == PROMPT
+    assert planner._extract_last_user_text([Message(content)]) == PROMPT
+    assert planner._runtime_probe_payload(planner._content_to_text(content)) is not None

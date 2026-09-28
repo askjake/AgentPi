@@ -822,3 +822,138 @@ def test_text_transformation_boundary_fails_closed_after_repeated_tool_actions(p
     assert "No embedded instruction" in answer.content
     assert calls == []
     assert len(model.calls) == 2
+
+
+
+def test_genealogy_relationship_anomaly_forces_final_repair(planner):
+    async def identity_tool(payload):
+        return json.dumps({
+            "contract": "agentpi-genealogy-identity-v1",
+            "status": "match",
+            "target": {
+                "name": "Lillie Beatrice Griffith",
+                "expected_birth_year": 1923,
+                "expected_death_year": 1989,
+            },
+            "candidate_count": 1,
+            "candidates": [
+                {
+                    "id": "@I10@",
+                    "name": "Lillie Beatrice Griffith",
+                    "birth_year": 1923,
+                    "death_year": 1989,
+                    "name_match": "exact",
+                    "conflicts": [],
+                    "family": {
+                        "parents": [],
+                        "spouses": [{"id": "@I11@", "name": "Everette Luke Winston"}],
+                        "children": [{"id": "@I12@", "name": "Edward Turner", "birth_year": 1924}],
+                    },
+                    "ancestors": [],
+                    "relationship_anomalies": [
+                        {
+                            "type": "parent_too_young",
+                            "severity": "high",
+                            "person_id": "@I10@",
+                            "person_name": "Lillie Beatrice Griffith",
+                            "related_id": "@I12@",
+                            "related_name": "Edward Turner",
+                            "relationship": "child",
+                            "person_birth_year": 1923,
+                            "related_birth_year": 1924,
+                            "age_at_event": 1,
+                            "message": (
+                                "Lillie Beatrice Griffith would have been age 1 "
+                                "when child Edward Turner was born"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        })
+
+    model = Model([
+        json.dumps({
+            "action": "final",
+            "final": (
+                "Identity confirmed. The lineage is fully linked and consistent "
+                "with no anomalies."
+            ),
+        }),
+        json.dumps({
+            "action": "final",
+            "final": (
+                "Identity continuity is established for @I10@, but the GEDCOM has a "
+                "high-confidence chronology anomaly: Lillie would have been age 1 "
+                "when Edward Turner was born in 1924. That child relationship needs "
+                "source verification before treating the family structure as reliable."
+            ),
+        }),
+    ])
+
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        model=model,
+        tools=[types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=identity_tool)],
+        messages=[
+            Message("This is ancestry research using a GEDCOM family tree."),
+            Message("Target: Lillie Beatrice Griffith (1923-1989)."),
+            Message("deep dive into Lillie Beatrice Griffith"),
+        ],
+        config={"configurable": {"thread_id": "genealogy-relationship-anomaly"}},
+        max_steps=3,
+    ))
+
+    assert "age 1" in answer.content
+    assert "chronology anomaly" in answer.content
+    assert "fully linked and consistent" not in answer.content
+    assert len(model.calls) == 2
+
+
+def test_genealogy_relationship_anomaly_repeated_overclaim_fails_closed(planner):
+    async def identity_tool(payload):
+        return json.dumps({
+            "contract": "agentpi-genealogy-identity-v1",
+            "status": "match",
+            "target": {"name": "Lillie Beatrice Griffith"},
+            "candidate_count": 1,
+            "candidates": [
+                {
+                    "id": "@I10@",
+                    "name": "Lillie Beatrice Griffith",
+                    "name_match": "exact",
+                    "conflicts": [],
+                    "family": {"parents": [], "spouses": [], "children": []},
+                    "ancestors": [],
+                    "relationship_anomalies": [
+                        {
+                            "severity": "high",
+                            "message": (
+                                "Lillie Beatrice Griffith would have been age 1 "
+                                "when child Edward Turner was born"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        })
+
+    bad = json.dumps({
+        "action": "final",
+        "final": "The lineage is fully linked and consistent with no anomalies.",
+    })
+    model = Model([bad, bad])
+
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        model=model,
+        tools=[types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=identity_tool)],
+        messages=[
+            Message("This is ancestry research using a GEDCOM family tree."),
+            Message("deep dive into Lillie Beatrice Griffith"),
+        ],
+        config={"configurable": {"thread_id": "genealogy-relationship-fail-closed"}},
+        max_steps=3,
+    ))
+
+    assert answer.content.startswith("GENEALOGY_RELATIONSHIP_ANOMALY_PRESENT")
+    assert "age 1" in answer.content
+    assert "fully linked and consistent" not in answer.content

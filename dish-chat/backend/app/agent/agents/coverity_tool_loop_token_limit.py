@@ -14,7 +14,7 @@ import logging
 
 from app.core.llm import get_model
 from app.core.llm.coverity_assist_chat_model import CoverityAssistChatModel
-from app.tools.web_search import render_public_search_output
+from app.agent.agents.search_renderer import render_public_search_output
 from .host_context import build_host_context
 
 logger = logging.getLogger(__name__)

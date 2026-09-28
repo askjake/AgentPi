@@ -79,15 +79,16 @@ def test_direct_search_falls_back_from_html_to_lite(monkeypatch):
     assert [call[2] for call in calls] == ["us-en", "us-en"]
 
 
-def test_search_probe_reports_actual_direct_backend(monkeypatch):
+def test_search_probe_reports_repeated_direct_backend(monkeypatch):
+    calls = []
+
     async def fake_perform(query, max_results):
-        assert query == "OpenAI"
-        assert max_results == 1
+        calls.append((query, max_results))
         return {
             "query": query,
             "backend": "direct",
-            "source": "ddg-html",
-            "results": [{"title": "OpenAI", "url": "https://openai.com", "snippet": "fixture"}],
+            "source": "ddg-html" if query == "OpenAI" else "ddg-lite",
+            "results": [{"title": query, "url": "https://example.com", "snippet": "fixture"}],
         }
 
     monkeypatch.setattr(web_search, "_perform_search", fake_perform)
@@ -95,12 +96,10 @@ def test_search_probe_reports_actual_direct_backend(monkeypatch):
     report = asyncio.run(web_search.probe_public_search())
     assert report["status"] == "healthy"
     assert report["effective_mode"] == "direct"
-    assert report["probe"] == {
-        "ok": True,
-        "backend": "direct",
-        "source": "ddg-html",
-        "result_count": 1,
-    }
+    assert calls == [("OpenAI", 1), ("Python documentation", 1)]
+    assert [item["source"] for item in report["probes"]] == ["ddg-html", "ddg-lite"]
+    assert all(item["ok"] for item in report["probes"])
+    assert report["probe"] == report["probes"][0]
 
 
 def test_sensitive_private_ip_never_reaches_public_backend(monkeypatch):
@@ -157,3 +156,36 @@ def test_direct_fetch_builds_bounded_duckduckgo_request(monkeypatch):
     assert observed["timeout"] == 7.0
     assert observed["limit"] == 2_000_000
     assert "AgentPi" in observed["ua"]
+
+
+def test_search_probe_is_unhealthy_when_second_request_fails(monkeypatch):
+    calls = 0
+
+    async def fake_perform(query, max_results):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "query": query,
+                "backend": "direct",
+                "source": "ddg-html",
+                "results": [{"title": query, "url": "https://example.com", "snippet": "fixture"}],
+            }
+        return {
+            "error": "Search failed",
+            "message": "fixture second-request failure",
+            "query": query,
+            "backend": "direct",
+            "attempts": [
+                {"backend": "ddg-html", "status": "error", "error_type": "URLError"},
+                {"backend": "ddg-lite", "status": "error", "error_type": "URLError"},
+            ],
+        }
+
+    monkeypatch.setattr(web_search, "_perform_search", fake_perform)
+    monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_MODE", "direct")
+    report = asyncio.run(web_search.probe_public_search())
+    assert report["status"] == "unhealthy"
+    assert report["probes"][0]["ok"] is True
+    assert report["probes"][1]["ok"] is False
+    assert report["probes"][1]["error"] == "fixture second-request failure"

@@ -262,10 +262,17 @@ def test_genealogy_identity_continuity_contract():
     assert '@tool("agent_genealogy_identity_check")' in genealogy, "genealogy identity tool missing"
     assert "Only status=match permits treating a GEDCOM candidate as the target person" in genealogy, "identity continuity rule missing"
     assert "GEDCOM path must stay inside the conversation workspace" in genealogy, "genealogy workspace boundary missing"
+    assert "ZIP containing a GEDCOM" in genealogy and "zipfile.ZipFile" in genealogy, "read-only ZIP GEDCOM inspection missing"
+    assert "def _ancestor_context(" in genealogy and '"ancestors"' in genealogy, "bounded ancestor evidence missing"
+    assert "birth year missing; expected" in genealogy and "death year missing; expected" in genealogy, "expected-date completeness guard missing"
     assert "agent_genealogy_identity_check" in registry, "genealogy identity tool is not registered"
     assert "def _looks_like_genealogy_identity_request" in loop, "genealogy identity gate detector missing"
+    assert "def _infer_genealogy_expected_years" in loop, "genealogy transcript-date enrichment missing"
     assert "GENEALOGY_IDENTITY_CHECK_REQUIRED" in loop, "genealogy final-answer gate missing"
     assert "GENEALOGY_IDENTITY_CONTINUITY_" in loop, "deterministic conflict renderer missing"
+    assert "GENEALOGY_LINEAGE_EVIDENCE_REQUIRED" in loop, "genealogy lineage evidence gate missing"
+    assert "never infer from surname or spouse alone" in loop, "genealogy lineage anti-inference rule missing"
+    assert "if genealogy_identity_required" in loop and "else await _maybe_handle_obvious_direct_task" in loop, "genealogy direct-task bypass remains"
     assert 'selected.name == "agent_genealogy_identity_check"' in loop, "genealogy identity result enforcement missing"
 
 

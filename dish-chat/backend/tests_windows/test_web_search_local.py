@@ -385,3 +385,88 @@ def test_transient_failure_after_recent_success_reports_degraded(monkeypatch):
     assert status["status"] == "degraded"
     assert status["last_success"]["result_count"] == 1
     assert status["last_failure"]["error"] == "fixture transient empty"
+
+
+def test_deterministic_renderer_emits_clickable_links_and_evidence():
+    payload = {
+        "query": "python release notes",
+        "backend": "direct",
+        "source": "ddg-lite",
+        "tls_backend": "windows-cryptoapi-truststore",
+        "cache": {"hit": True, "age_seconds": 3.25, "ttl_seconds": 120.0},
+        "attempts": [
+            {"backend": "ddg-html", "round": 1, "status": "empty"},
+            {"backend": "ddg-lite", "round": 1, "status": "ok"},
+        ],
+        "results": [
+            {
+                "title": "Python 3.13 [release]",
+                "url": "https://www.python.org/downloads/release/python-31315/",
+                "snippet": "Official *maintenance* release notes.",
+            }
+        ],
+    }
+
+    rendered = web_search.render_public_search_payload(payload)
+
+    assert rendered.startswith("## Web search results")
+    assert "[Python 3.13 \\[release\\]](https://www.python.org/downloads/release/python-31315/)" in rendered
+    assert "Official \\*maintenance\\* release notes." in rendered
+    assert "backend=\`direct\`" in rendered
+    assert "source=\`ddg-lite\`" in rendered
+    assert "TLS=\`windows-cryptoapi-truststore\`" in rendered
+    assert "cache=\`hit\`" in rendered
+    assert "Cache age:" in rendered
+    assert "ddg-html r1: empty" in rendered
+    assert "ddg-lite r1: ok" in rendered
+    assert "no LLM summarization was used" in rendered
+
+
+def test_deterministic_renderer_rejects_unsafe_result_url():
+    rendered = web_search.render_public_search_payload({
+        "query": "fixture",
+        "backend": "direct",
+        "source": "fixture",
+        "results": [
+            {
+                "title": "unsafe [link]",
+                "url": "javascript:alert(1)",
+                "snippet": "must not become clickable",
+            }
+        ],
+    })
+
+    assert "javascript:alert(1)" not in rendered
+    assert "### 1. unsafe \\[link\\]" in rendered
+    assert "must not become clickable" in rendered
+
+
+def test_deterministic_renderer_handles_failure_without_inference():
+    rendered = web_search.render_public_search_payload({
+        "query": "fixture failure",
+        "backend": "direct",
+        "cache": {"hit": False},
+        "error": "Search failed",
+        "message": "No usable results after bounded retries.",
+        "attempts": [
+            {"backend": "ddg-html", "round": 1, "status": "empty"},
+            {"backend": "ddg-lite", "round": 1, "status": "empty"},
+        ],
+    })
+
+    assert rendered.startswith("## Web search unavailable")
+    assert "No usable results after bounded retries." in rendered
+    assert "results=\`0\`" in rendered
+    assert "ddg-html r1: empty" in rendered
+    assert "No result links are inferred" not in rendered
+
+
+def test_deterministic_renderer_fails_closed_on_malformed_payload():
+    rendered = web_search.render_public_search_output(
+        "Query: fixture\n{not-json",
+        requested_query="fixture",
+    )
+
+    assert rendered.startswith("## Web search output could not be rendered safely")
+    assert "No result links are inferred." in rendered
+    assert "No LLM summarization was used." in rendered

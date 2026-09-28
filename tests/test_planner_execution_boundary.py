@@ -333,7 +333,7 @@ def test_search_diagnostic_uses_status_tool_without_provider(planner):
     assert "Public web search diagnostics (actual runtime output)" in answer.content
     assert '"effective_mode": "direct"' in answer.content
     assert '"source": "ddg-html"' in answer.content
-    assert calls == [{"probe": True}]
+    assert calls == [{"probe": False}]
 
 
 def test_fresh_search_returns_actual_tool_output_without_model(planner):

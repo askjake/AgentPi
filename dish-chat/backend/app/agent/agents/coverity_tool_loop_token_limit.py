@@ -114,6 +114,7 @@ async def _invoke_tool(tool: Any, tool_input: Any, chat_id: Optional[str] = None
 
 
 def _content_to_text(content: Any) -> str:
+    """Return user-visible textual content while ignoring provider transport metadata."""
     if content is None:
         return ""
     if isinstance(content, str):
@@ -126,6 +127,11 @@ def _content_to_text(content: Any) -> str:
             elif isinstance(item, dict):
                 if item.get("type") == "text":
                     out.append(str(item.get("text", "")))
+                elif "cachePoint" in item:
+                    # Bedrock/provider cache-point blocks are transport metadata
+                    # inserted by aggressive_cachept(). They are not part of the
+                    # user's request and must never affect intent matching.
+                    continue
                 else:
                     out.append(json.dumps(item, ensure_ascii=False))
             else:
@@ -134,6 +140,8 @@ def _content_to_text(content: Any) -> str:
     if isinstance(content, dict):
         if content.get("type") == "text":
             return str(content.get("text", ""))
+        if "cachePoint" in content:
+            return ""
         return json.dumps(content, ensure_ascii=False)
     return str(content)
 

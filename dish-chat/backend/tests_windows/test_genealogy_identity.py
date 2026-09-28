@@ -276,3 +276,71 @@ def test_samuel_identity_match_has_no_branch_ancestry_in_fixture(workspace):
     assert candidate["family"]["spouses"][0]["name"] == "Lillie Griffith"
     assert candidate["family"]["parents"] == []
     assert candidate["ancestors"] == []
+
+
+
+_LILLIE_BEATRICE_ANOMALY_GEDCOM = """0 HEAD
+0 @I10@ INDI
+1 NAME Lillie Beatrice /Griffith/
+1 SEX F
+1 BIRT
+2 DATE 14 AUG 1923
+1 DEAT
+2 DATE 21 DEC 1989
+1 FAMS @F10@
+0 @I11@ INDI
+1 NAME Everette Luke /Winston/
+1 SEX M
+1 BIRT
+2 DATE 1921
+1 FAMS @F10@
+0 @I12@ INDI
+1 NAME Edward /Turner/
+1 SEX M
+1 BIRT
+2 DATE 1924
+1 FAMC @F10@
+0 @F10@ FAM
+1 HUSB @I11@
+1 WIFE @I10@
+1 CHIL @I12@
+0 TRLR
+"""
+
+
+def test_identity_match_keeps_relationship_anomaly_separate(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_MODE_WORKDIR", str(tmp_path))
+    ws = tmp_path / "chat"
+    ws.mkdir(parents=True)
+    ged = ws / "lillie-beatrice.ged"
+    ged.write_text(_LILLIE_BEATRICE_ANOMALY_GEDCOM, encoding="utf-8")
+
+    report = genealogy.inspect_gedcom_identity(
+        chat_id="chat",
+        target_name="Lillie Beatrice Griffith",
+        expected_birth_year=1923,
+        expected_death_year=1989,
+    )
+
+    assert report["status"] == "match"
+    candidate = report["candidates"][0]
+    assert candidate["id"] == "@I10@"
+    assert candidate["conflicts"] == []
+    assert candidate["relationship_anomalies"] == [
+        {
+            "type": "parent_too_young",
+            "severity": "high",
+            "person_id": "@I10@",
+            "person_name": "Lillie Beatrice Griffith",
+            "related_id": "@I12@",
+            "related_name": "Edward Turner",
+            "relationship": "child",
+            "person_birth_year": 1923,
+            "related_birth_year": 1924,
+            "age_at_event": 1,
+            "message": (
+                "Lillie Beatrice Griffith would have been age 1 "
+                "when child Edward Turner was born"
+            ),
+        }
+    ]

@@ -71,7 +71,7 @@ def test_bridge_tools():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_registry_count():
     src = pathlib.Path(os.path.join(REPO,
-        "dish-chat/backend/app/agent/agents/tools/registry.py")).read_text()
+        "dish-chat/backend/app/agent/agents/tools/registry.py")).read_text(encoding="utf-8")
     m = re.search(r'"agent_mode":\s*lambda:\s*\[(.*?)\]', src, re.S)
     assert m, "agent_mode lambda not found"
     names = re.findall(r'\b(agentpi_\w+|agent_\w+)\b', m.group(1))
@@ -86,7 +86,7 @@ def test_registry_count():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_patch05():
     src = pathlib.Path(os.path.join(REPO,
-        "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
+        "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text(encoding="utf-8")
     assert "SCRATCHPAD_LIMIT = 8_000"  in src, "SCRATCHPAD_LIMIT missing"
     assert "SUMMARIZER_LIMIT = 16_000" in src, "SUMMARIZER_LIMIT missing"
     assert "TRUNCATED"                 in src, "[TRUNCATED] marker missing"
@@ -95,7 +95,7 @@ def test_patch05():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_patch06():
     src = pathlib.Path(os.path.join(REPO,
-        "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
+        "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text(encoding="utf-8")
     m = re.search(r'_COVERITY_LLM_TYPES\s*=\s*\{([^}]+)\}', src)
     assert m, "_COVERITY_LLM_TYPES set not found"
     body = m.group(1)
@@ -106,7 +106,7 @@ def test_patch06():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_patch02():
     src = pathlib.Path(os.path.join(REPO,
-        "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
+        "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text(encoding="utf-8")
     assert "_is_mdns_specific"       in src, "_is_mdns_specific missing"
     assert "PATCH-02"                in src, "PATCH-02 comment missing"
     assert "agentpi_discover_devices" in src, "bridge guard missing in fast-path"
@@ -122,7 +122,7 @@ def test_patch02():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_patch03():
     src = pathlib.Path(os.path.join(REPO,
-        "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
+        "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text(encoding="utf-8")
     assert "fallback_tool"    in src, "fallback_tool param missing"
     assert "network_dead"     in src, "network_dead flag missing"
     assert "short-circuiting" in src, "short-circuit log missing"
@@ -131,7 +131,7 @@ def test_patch03():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_patch06_model():
     src = pathlib.Path(os.path.join(REPO,
-        "dish-chat/backend/app/core/llm/coverity_assist_chat_model.py")).read_text()
+        "dish-chat/backend/app/core/llm/coverity_assist_chat_model.py")).read_text(encoding="utf-8")
     assert "_llm_type_base"           in src, "_llm_type_base missing"
     assert 'return "coverity-assist"' in src, "base return value missing"
     assert "PATCH-06"                 in src, "PATCH-06 comment missing"
@@ -139,7 +139,7 @@ def test_patch06_model():
 # PATCH-08: SQLite store structure
 # ─────────────────────────────────────────────────────────────────────────────
 def test_patch08():
-    src = pathlib.Path(os.path.join(REPO, "backend/store.py")).read_text()
+    src = pathlib.Path(os.path.join(REPO, "backend/store.py")).read_text(encoding="utf-8")
     assert "sqlite3"         in src, "sqlite3 import missing"
     assert "WAL"             in src, "WAL journal mode missing"
     assert "DeviceInventory" in src, "DeviceInventory class missing"
@@ -148,19 +148,19 @@ def test_patch08():
     assert '"runtime" / "agentpi-devices.db"' in src, "portable repo-runtime default missing"
     assert '"/var/lib/agentpi/devices.db"' not in src, "non-portable hardcoded default remains"
 
-    win = pathlib.Path(os.path.join(REPO, "deployment/windows/start.ps1")).read_text()
+    win = pathlib.Path(os.path.join(REPO, "deployment/windows/start.ps1")).read_text(encoding="utf-8")
     assert "AGENTPI_DB" in win and "agentpi-devices.db" in win, "Windows AGENTPI_DB runtime override missing"
 
-    svc = pathlib.Path(os.path.join(REPO, "deployment/linux/agentpi.service")).read_text()
+    svc = pathlib.Path(os.path.join(REPO, "deployment/linux/agentpi.service")).read_text(encoding="utf-8")
     assert "StateDirectory=agentpi" in svc, "systemd StateDirectory missing"
     assert "Environment=AGENTPI_DB=/var/lib/agentpi/devices.db" in svc, "systemd AGENTPI_DB override missing"
 # ─────────────────────────────────────────────────────────────────────────────
 # Windows runtime: reserved-port fallback contract
 # ─────────────────────────────────────────────────────────────────────────────
 def test_windows_agentpi_port_fallback():
-    start = pathlib.Path(os.path.join(REPO, "deployment/windows/start.ps1")).read_text()
-    runner = pathlib.Path(os.path.join(REPO, "deployment/windows/run_dishchat_backend.py")).read_text()
-    verify = pathlib.Path(os.path.join(REPO, "deployment/windows/verify.ps1")).read_text()
+    start = pathlib.Path(os.path.join(REPO, "deployment/windows/start.ps1")).read_text(encoding="utf-8")
+    runner = pathlib.Path(os.path.join(REPO, "deployment/windows/run_dishchat_backend.py")).read_text(encoding="utf-8")
+    verify = pathlib.Path(os.path.join(REPO, "deployment/windows/verify.ps1")).read_text(encoding="utf-8")
     assert "agentpi-port.txt" in start, "selected AgentPi port marker missing"
     assert "18765" in start and "28765" in start, "fallback port candidates missing"
     assert "Test-LoopbackPortBindable" in start, "bind probe missing"
@@ -171,10 +171,10 @@ def test_windows_agentpi_port_fallback():
 # Backend longevity: streaming responses must not pin request DB sessions
 # ─────────────────────────────────────────────────────────────────────────────
 def test_stream_db_lifetime():
-    router = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/message/router.py")).read_text()
-    usage = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/usage_tracking/service.py")).read_text()
-    dbbase = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/db/base.py")).read_text()
-    health = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/health/router.py")).read_text()
+    router = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/message/router.py")).read_text(encoding="utf-8")
+    usage = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/usage_tracking/service.py")).read_text(encoding="utf-8")
+    dbbase = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/db/base.py")).read_text(encoding="utf-8")
+    health = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/health/router.py")).read_text(encoding="utf-8")
 
     send_start = router.index('async def send_message(')
     send_end = router.index('@router.get("/chats/{chat_id}/messages/{message_id}/versions")')
@@ -200,12 +200,12 @@ def test_stream_db_lifetime():
 # Environment-aware network mapping
 # ─────────────────────────────────────────────────────────────────────────────
 def test_environment_aware_network_mapping():
-    host = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/host_context.py")).read_text()
-    loop = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
-    bridge = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/tools/agentpi_bridge.py")).read_text()
-    arp = pathlib.Path(os.path.join(REPO, "backend/discovery/arp.py")).read_text()
-    app = pathlib.Path(os.path.join(REPO, "backend/app.py")).read_text()
-    tools = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent_mode/tools.py")).read_text()
+    host = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/host_context.py")).read_text(encoding="utf-8")
+    loop = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text(encoding="utf-8")
+    bridge = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/tools/agentpi_bridge.py")).read_text(encoding="utf-8")
+    arp = pathlib.Path(os.path.join(REPO, "backend/discovery/arp.py")).read_text(encoding="utf-8")
+    app = pathlib.Path(os.path.join(REPO, "backend/app.py")).read_text(encoding="utf-8")
+    tools = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent_mode/tools.py")).read_text(encoding="utf-8")
 
     assert 'native_windows = os.name == "nt"' in host, "native Windows detection missing"
     assert "You are running natively on Windows." in host, "Windows host guidance missing"
@@ -231,8 +231,8 @@ def test_environment_aware_network_mapping():
 # Pytest/runtime persistence isolation
 # ─────────────────────────────────────────────────────────────────────────────
 def test_pytest_persistent_inventory_isolation():
-    conftest = pathlib.Path(os.path.join(REPO, "tests/conftest.py")).read_text()
-    app = pathlib.Path(os.path.join(REPO, "backend/app.py")).read_text()
+    conftest = pathlib.Path(os.path.join(REPO, "tests/conftest.py")).read_text(encoding="utf-8")
+    app = pathlib.Path(os.path.join(REPO, "backend/app.py")).read_text(encoding="utf-8")
 
     assert 'os.environ["AGENTPI_DB"]' in conftest, "pytest import-time AGENTPI_DB isolation missing"
     assert "isolated_agentpi_db" in conftest and "monkeypatch.setenv" in conftest, "per-test AGENTPI_DB isolation missing"
@@ -248,13 +248,13 @@ def test_pytest_persistent_inventory_isolation():
 def test_genealogy_identity_continuity_contract():
     genealogy = pathlib.Path(os.path.join(
         REPO, "dish-chat/backend/app/agent_mode/genealogy.py"
-    )).read_text()
+    )).read_text(encoding="utf-8")
     registry = pathlib.Path(os.path.join(
         REPO, "dish-chat/backend/app/agent/agents/tools/registry.py"
-    )).read_text()
+    )).read_text(encoding="utf-8")
     loop = pathlib.Path(os.path.join(
         REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py"
-    )).read_text()
+    )).read_text(encoding="utf-8")
 
     ast.parse(genealogy, filename="dish-chat/backend/app/agent_mode/genealogy.py")
     assert "agentpi-genealogy-identity-v1" in genealogy, "genealogy identity contract missing"
@@ -268,6 +268,10 @@ def test_genealogy_identity_continuity_contract():
     assert "agent_genealogy_identity_check" in registry, "genealogy identity tool is not registered"
     assert "def _looks_like_genealogy_identity_request" in loop, "genealogy identity gate detector missing"
     assert "def _infer_genealogy_expected_years" in loop, "genealogy transcript-date enrichment missing"
+    assert "def _extract_genealogy_target_name" in loop, "genealogy deterministic target extraction missing"
+    assert "def _normalize_genealogy_identity_input" in loop, "genealogy tool-input normalization missing"
+    assert "intent=genealogy_identity_preflight" in loop, "genealogy deterministic preflight route missing"
+    assert "GENEALOGY_IDENTITY_TARGET_REQUIRED" in loop, "genealogy unresolved-target guard missing"
     assert "GENEALOGY_IDENTITY_CHECK_REQUIRED" in loop, "genealogy final-answer gate missing"
     assert "GENEALOGY_IDENTITY_CONTINUITY_" in loop, "deterministic conflict renderer missing"
     assert "GENEALOGY_LINEAGE_EVIDENCE_REQUIRED" in loop, "genealogy lineage evidence gate missing"
@@ -280,13 +284,13 @@ def test_genealogy_identity_continuity_contract():
 # Local public web search must not depend on an unstarted localhost gateway
 # ─────────────────────────────────────────────────────────────────────────────
 def test_local_public_web_search():
-    search = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/tools/web_search.py")).read_text()
-    renderer = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/search_renderer.py")).read_text()
-    config = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/config.py")).read_text()
-    installer = pathlib.Path(os.path.join(REPO, "deployment/windows/install.ps1")).read_text()
-    registry = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/tools/registry.py")).read_text()
-    health = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/health/router.py")).read_text()
-    loop = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
+    search = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/tools/web_search.py")).read_text(encoding="utf-8")
+    renderer = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/search_renderer.py")).read_text(encoding="utf-8")
+    config = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/config.py")).read_text(encoding="utf-8")
+    installer = pathlib.Path(os.path.join(REPO, "deployment/windows/install.ps1")).read_text(encoding="utf-8")
+    registry = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/tools/registry.py")).read_text(encoding="utf-8")
+    health = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/health/router.py")).read_text(encoding="utf-8")
+    loop = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text(encoding="utf-8")
 
     ast.parse(search, filename="dish-chat/backend/app/tools/web_search.py")
     ast.parse(renderer, filename="dish-chat/backend/app/agent/agents/search_renderer.py")

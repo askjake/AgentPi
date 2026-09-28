@@ -54,7 +54,7 @@ def planner(monkeypatch):
         "langchain_core.messages",
         "app.core.llm",
         "app.core.llm.coverity_assist_chat_model",
-        "app.tools.web_search",
+        "app.agent.agents.search_renderer",
         "host_context",
     }
     tree.body = [n for n in tree.body if not (isinstance(n, ast.ImportFrom) and n.module in excluded)]

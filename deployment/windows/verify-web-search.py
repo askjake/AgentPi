@@ -26,6 +26,7 @@ safe = {
     "configured_mode": payload.get("configured_mode"),
     "effective_mode": payload.get("effective_mode"),
     "direct_backends": payload.get("direct_backends"),
+    "tls_preference": payload.get("tls_preference"),
     "loaded_search_source_sha256": loaded_sha,
     "expected_search_source_sha256": expected_sha,
     "source_identity_matches": loaded_sha == expected_sha,

@@ -482,18 +482,18 @@ def _extract_genealogy_target_name(
     """Extract the named person under research without guessing from surnames alone."""
     name = r"[A-Z][A-Za-z'’.-]+(?:\s+(?:[A-Z]\.|[A-Z][A-Za-z'’.-]+)){1,3}"
     patterns = [
-        rf"\btarget\s*:\s*({name})",
-        rf"\b(?:deep dive into|dig deeper into|investigate|research|look into|trace|verify|resolve|identify)\s+({name})",
-        rf"\b(?:identifies?|identified)\s+({name})\s+(?:as|born|b\.)",
-        rf"\bfor\s+({name})(?:[.,;:]|\s*$)",
+        rf"(?i:\btarget\s*:)\s*({name})",
+        rf"(?i:\b(?:deep dive into|dig deeper into|investigate|research|look into|trace|verify|resolve|identify))\s+({name})",
+        rf"(?i:\b(?:identifies?|identified))\s+({name})\s+(?i:as|born|b\.)",
+        rf"(?i:\bfor)\s+({name})(?:[.,;:]|\s*$)",
         rf"\b({name})\s*\((?:1[5-9]\d{{2}}|20\d{{2}})\s*[-–—]\s*(?:1[5-9]\d{{2}}|20\d{{2}})\)",
-        rf"\b({name})\s+(?:is|was)\s+(?:recorded|listed|born|identified)\b",
+        rf"\b({name})\s+(?i:is|was)\s+(?i:recorded|listed|born|identified)\b",
     ]
 
     def matches(text: str) -> list[str]:
         found: list[str] = []
         for pattern in patterns:
-            for match in re.finditer(pattern, text, re.I):
+            for match in re.finditer(pattern, text):
                 candidate = " ".join(match.group(1).split()).strip(" .,:;")
                 tokens = candidate.split()
                 lowered = {token.casefold().rstrip(".") for token in tokens}

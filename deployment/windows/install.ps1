@@ -99,6 +99,9 @@ Set-DotEnvValue $BackendEnv "DEFAULT_MODEL_PREFERENCE" "reasoning" -OnlyIfMissin
 Set-DotEnvValue $BackendEnv "ENABLE_TOOL_CALLS" "true" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "MAX_TOOL_ITERATIONS" "100" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "TOOL_CALL_TIMEOUT" "12000" -OnlyIfMissing
+Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_MODE" "direct" -OnlyIfMissing
+Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_TIMEOUT_SECONDS" "20" -OnlyIfMissing
+Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_REGION" "us-en" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "ENABLE_BETAREPORT_MCP" "false" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "ENABLE_VIEWERSHIP_MCP" "false" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "ENABLE_LOG_ASSIST_MCP" "false" -OnlyIfMissing

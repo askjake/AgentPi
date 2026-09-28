@@ -427,6 +427,54 @@ def _looks_like_genealogy_identity_request(user_text: str, recent_transcript: st
     return False
 
 
+def _looks_like_genealogy_lineage_request(
+    user_text: str,
+    recent_transcript: str = "",
+) -> bool:
+    if not _looks_like_genealogy_identity_request(user_text, recent_transcript):
+        return False
+    return bool(re.search(
+        r"\b(?:branch|lineage|belongs|belong|ancestry|ancestor|connection|connect)\b",
+        user_text,
+        re.I,
+    ))
+
+
+def _matched_genealogy_candidate(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if payload.get("status") != "match":
+        return None
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list):
+        return None
+    matches = [
+        candidate for candidate in candidates
+        if isinstance(candidate, dict)
+        and candidate.get("name_match") == "exact"
+        and not candidate.get("conflicts")
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _render_genealogy_lineage_unresolved(payload: dict[str, Any]) -> str:
+    target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
+    candidate = _matched_genealogy_candidate(payload) or {}
+    name = candidate.get("name") or target.get("name") or "requested person"
+    rid = candidate.get("id")
+    lines = [
+        "GENEALOGY_LINEAGE_EVIDENCE_REQUIRED",
+        "",
+        f"Identity matched: {name}" + (f" [{rid}]" if rid else ""),
+        (
+            "The GEDCOM record does not provide parent/ancestor evidence sufficient to classify this person "
+            "into the requested family branch."
+        ),
+        "",
+        "A surname or spouse relationship is not proof of branch membership. "
+        "Trace FAMC/parent links (or another cited relationship path) before assigning the person to the main branch.",
+    ]
+    return "\n".join(lines)
+
+
 def _infer_genealogy_expected_years(
     target_name: str,
     user_text: str,
@@ -757,6 +805,7 @@ def _build_planner_prompt(user_text: str, recent_transcript: str, system_text: s
         "9. Build large artifacts in small verified chunks. Do not put an entire GUI into one tool call; inspect actual API schemas first, then write, parse/compile, and smoke-test files separately.",
         "10. Do not run a persistent GUI mainloop in a bounded Python execution call. Preparing an app, testing it, creating a shortcut, and launching it are distinct operations.",
         "11. For person-specific genealogy/GEDCOM work, call agent_genealogy_identity_check before identifying a same/similar-name record as the target. Only status=match permits identity continuity. Treat ambiguous/conflict/not_found as separate identities and do not merge them.",
+        "12. For genealogy branch/lineage membership, never infer from surname or spouse alone. Use FAMC parent links and the bounded ancestors returned by agent_genealogy_identity_check; if those links are absent, report lineage membership as unresolved.",
         '{"action":"tool","tool":"TOOL_NAME","input":"TEXT_OR_JSON"}',
         '{"action":"final","final":"YOUR FINAL ANSWER"}',
         "",
@@ -804,6 +853,10 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     system_text = _extract_system_text(messages)
     chat_id = _extract_chat_id(config)
     genealogy_identity_required = _looks_like_genealogy_identity_request(
+        user_text,
+        recent_transcript,
+    )
+    genealogy_lineage_required = _looks_like_genealogy_lineage_request(
         user_text,
         recent_transcript,
     )
@@ -889,6 +942,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     protocol_failures = 0
     returned_tools: list[str] = []
     genealogy_identity_checked = False
+    genealogy_identity_report: dict[str, Any] | None = None
 
     for _ in range(planner_steps):
         planner_prompt = _build_planner_prompt(user_text, recent_transcript, system_text, normalized_tools, scratchpad, chat_id)
@@ -963,6 +1017,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
                     "agentpi-genealogy-identity-v1 contract. No genealogy identity conclusion is permitted."
                 ))
             genealogy_identity_checked = True
+            genealogy_identity_report = identity_payload
             identity_status = str(identity_payload.get("status") or "error")
             if identity_status != "match":
                 return AIMessage(content=_render_genealogy_identity_block(identity_payload))

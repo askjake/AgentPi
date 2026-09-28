@@ -252,6 +252,7 @@ def test_local_public_web_search():
     health = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/health/router.py")).read_text()
     loop = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
 
+    ast.parse(search, filename="dish-chat/backend/app/tools/web_search.py")
     assert "PUBLIC_WEB_SEARCH_MODE" in config, "search mode setting missing"
     assert '"auto", "direct", "gateway"' in config, "search mode choices missing"
     assert 'PUBLIC_WEB_SEARCH_MODE" "direct"' in installer, "Windows installer does not select direct search"
@@ -260,6 +261,8 @@ def test_local_public_web_search():
     assert "truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)" in search, "Windows native trust-store TLS context missing"
     assert "CERT_NONE" not in search and "_create_unverified_context" not in search and "verify=False" not in search, "public search must not disable TLS verification"
     assert "def _parse_duckduckgo_results(" in search, "direct-search parser missing"
+    assert "return quote(url, safe=\":/?#@!    assert "def _parse_duckduckgo_results(" in search, "direct-search parser missing"
+'*+,;=%._~-\")" in search, "safe encoded Markdown URL destination missing"
     assert "_SEARCH_CACHE" in search and "OrderedDict" in search, "bounded read-only search cache missing"
     assert "PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS" in search, "search cache TTL missing"
     assert "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES" in search, "search cache bound missing"

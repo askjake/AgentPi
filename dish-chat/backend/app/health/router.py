@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import text
 
 from app.db import get_db_session_ctxmgr, sessionmanager
+from app.tools.web_search import probe_public_search, search_runtime_status
 
 from .schemas import Health
 
@@ -56,3 +57,11 @@ async def execution_health_check() -> dict:
     identity['status'] = 'binding_verified' if identity['chat_binding_matches'] and identity['agent_mode_binding_matches'] else 'binding_mismatch'
     # Deliberately excludes credentials, URLs, user paths and conversation IDs.
     return identity
+
+
+@router.get("/health/search", tags=["health"])
+async def search_health_check(probe: bool = False) -> dict:
+    """Report the configured public-search route; optionally execute a safe probe."""
+    if probe:
+        return await probe_public_search()
+    return search_runtime_status()

@@ -148,30 +148,21 @@ def test_cached_human_message_still_matches_exact_probe(live_graph):
     ) is not None
 
 
-def test_live_search_diagnostic_bypasses_model(live_graph, monkeypatch):
+def test_live_search_diagnostic_bypasses_model_and_is_passive(live_graph, monkeypatch):
     rag, _, _, _, provider, HumanMessage, _ = live_graph
     from app.tools import web_search
 
-    async def fake_probe():
-        return {
-            "status": "healthy",
-            "contract": "agentpi-public-search-v2",
-            "configured_mode": "direct",
-            "effective_mode": "direct",
-            "loaded_search_source_sha256": "fixture",
-            "probes": [
-                {"query": "OpenAI", "ok": True, "backend": "direct", "source": "ddg-html", "result_count": 1},
-                {"query": "Python documentation", "ok": True, "backend": "direct", "source": "ddg-lite", "result_count": 1},
-            ],
-        }
+    async def forbidden_probe():
+        raise AssertionError("normal chat diagnosis must not actively probe provider")
 
-    monkeypatch.setattr(web_search, "probe_public_search", fake_probe)
+    monkeypatch.setattr(web_search, "probe_public_search", forbidden_probe)
     state = asyncio.run(rag.call_model(
         {"messages": [HumanMessage(content="diagnose your search tool first")], "model_config": {}},
         config={"configurable": {"thread_id": "search-diagnostic"}},
     ))
     text = state["messages"][-1].content
     assert "Public web search diagnostics (actual runtime output)" in text
+    assert '"diagnostic_mode": "passive_observation"' in text
     assert '"effective_mode": "direct"' in text
     assert provider.calls == 0
 

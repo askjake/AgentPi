@@ -214,3 +214,30 @@ def test_zip_with_multiple_gedcom_members_requires_explicit_resolution(tmp_path,
             chat_id="chat",
             target_name="Lillie Griffith",
         )
+
+
+
+def test_expected_date_missing_from_candidate_is_not_a_match(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_MODE_WORKDIR", str(tmp_path))
+    ws = tmp_path / "chat"
+    ws.mkdir(parents=True)
+    ged = ws / "missing-date.ged"
+    ged.write_text(
+        """0 @I1@ INDI
+1 NAME John /Smith/
+1 SEX M
+0 TRLR
+""",
+        encoding="utf-8",
+    )
+
+    report = genealogy.inspect_gedcom_identity(
+        chat_id="chat",
+        target_name="John Smith",
+        expected_birth_year=1923,
+    )
+
+    assert report["status"] == "conflict"
+    assert report["candidates"][0]["conflicts"] == [
+        "birth year missing; expected 1923"
+    ]

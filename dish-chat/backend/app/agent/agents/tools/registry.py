@@ -13,6 +13,7 @@ from app.tools.agentpi_bridge import (
     agentpi_homeassistant_start, agentpi_homeassistant_stop,
     agentpi_clear_inventory,
 )
+from app.agent_mode.genealogy import agent_genealogy_identity_check
 from app.agent_mode.tools import (
     agent_git_clone, agent_create_venv, agent_run_python,
     agent_list_artifacts, agent_run_shell,
@@ -47,6 +48,7 @@ _TF.update({
         agentpi_homeassistant_stop,    # PATCH-04
         agentpi_clear_inventory,       # PATCH-04
         # Development
+        agent_genealogy_identity_check,
         agent_git_clone, agent_create_venv, agent_run_python,
         agent_list_artifacts, agent_run_shell,
         # Network

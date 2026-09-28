@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import html
 import json
 import logging
 import ssl
 import sys
+import threading
+import time
+from collections import OrderedDict
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -28,6 +32,13 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 _LOADED_SEARCH_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 _SEARCH_CONTRACT = "agentpi-public-search-v2"
+
+# Bounded read-only cache + pacing. Only successful public-search observations
+# are cached; writes/device actions/credentials never pass through this module.
+_SEARCH_CACHE: "OrderedDict[tuple[str, int, str], tuple[float, dict[str, Any]]]" = OrderedDict()
+_SEARCH_CACHE_LOCK = threading.Lock()
+_DIRECT_FETCH_LOCK = threading.Lock()
+_LAST_DIRECT_FETCH_MONOTONIC = 0.0
 
 _DDG_BACKENDS = (
     ("ddg-html", "https://html.duckduckgo.com/html/"),
@@ -152,6 +163,64 @@ def _effective_search_mode() -> str:
     return "direct" if bool(getattr(settings, "LOCAL", False)) else "gateway"
 
 
+def _cache_key(query: str, max_results: int, region: str) -> tuple[str, int, str]:
+    return (" ".join(query.split()).casefold(), int(max_results), region.casefold())
+
+
+def _cache_get(query: str, max_results: int, region: str) -> dict[str, Any] | None:
+    ttl = max(0.0, float(getattr(settings, "PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS", 120.0)))
+    if ttl <= 0:
+        return None
+    now = time.monotonic()
+    key = _cache_key(query, max_results, region)
+    with _SEARCH_CACHE_LOCK:
+        cached = _SEARCH_CACHE.get(key)
+        if not cached:
+            return None
+        stored_at, payload = cached
+        age = now - stored_at
+        if age >= ttl:
+            _SEARCH_CACHE.pop(key, None)
+            return None
+        _SEARCH_CACHE.move_to_end(key)
+        result = copy.deepcopy(payload)
+    result["cache"] = {
+        "hit": True,
+        "age_seconds": round(max(0.0, age), 3),
+        "ttl_seconds": ttl,
+    }
+    return result
+
+
+def _cache_put(query: str, max_results: int, region: str, payload: dict[str, Any]) -> None:
+    if not payload.get("results"):
+        return
+    max_entries = max(1, min(int(getattr(settings, "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES", 64)), 512))
+    key = _cache_key(query, max_results, region)
+    stored = copy.deepcopy(payload)
+    stored["cache"] = {"hit": False}
+    with _SEARCH_CACHE_LOCK:
+        _SEARCH_CACHE[key] = (time.monotonic(), stored)
+        _SEARCH_CACHE.move_to_end(key)
+        while len(_SEARCH_CACHE) > max_entries:
+            _SEARCH_CACHE.popitem(last=False)
+
+
+def _cache_snapshot() -> dict[str, Any]:
+    ttl = max(0.0, float(getattr(settings, "PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS", 120.0)))
+    now = time.monotonic()
+    with _SEARCH_CACHE_LOCK:
+        expired = [key for key, (stored_at, _) in _SEARCH_CACHE.items() if now - stored_at >= ttl]
+        for key in expired:
+            _SEARCH_CACHE.pop(key, None)
+        size = len(_SEARCH_CACHE)
+    return {
+        "entries": size,
+        "max_entries": max(1, min(int(getattr(settings, "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES", 64)), 512)),
+        "ttl_seconds": ttl,
+    }
+
+
 def search_runtime_status() -> dict[str, Any]:
     gateway = str(getattr(settings, "COVERITY_GATEWAY_URL", "") or "").rstrip("/")
     return {
@@ -168,6 +237,21 @@ def search_runtime_status() -> dict[str, Any]:
             else "python-default-openssl"
         ),
         "gateway_url": gateway,
+        "cache": _cache_snapshot(),
+        "pacing": {
+            "min_interval_seconds": max(
+                0.0,
+                float(getattr(settings, "PUBLIC_WEB_SEARCH_MIN_INTERVAL_SECONDS", 0.75)),
+            ),
+            "empty_retry_seconds": max(
+                0.0,
+                float(getattr(settings, "PUBLIC_WEB_SEARCH_EMPTY_RETRY_SECONDS", 1.25)),
+            ),
+            "empty_retries": max(
+                0,
+                min(int(getattr(settings, "PUBLIC_WEB_SEARCH_EMPTY_RETRIES", 1)), 3),
+            ),
+        },
         "note": (
             "Local installs use direct DuckDuckGo HTML/Lite search in auto mode."
             if _effective_search_mode() == "direct"
@@ -201,64 +285,101 @@ def _build_direct_ssl_context():
 
 
 def _fetch_direct_page(url: str, query: str, region: str, timeout: float) -> tuple[str, str]:
-    """Fetch through urllib with a verified native/system TLS context."""
+    """Fetch through urllib with verified TLS and serialized request pacing."""
+    global _LAST_DIRECT_FETCH_MONOTONIC
+
     target = f"{url}?{urlencode({'q': query, 'kl': region})}"
     request = Request(target, headers=_DEFAULT_HEADERS, method="GET")
     context, tls_backend = _build_direct_ssl_context()
-    with urlopen(request, timeout=timeout, context=context) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        # Search result pages should be small; bound the read to avoid accidental
-        # unbounded downloads from a changed or intercepted endpoint.
-        body = response.read(2_000_000)
+    min_interval = max(
+        0.0,
+        float(getattr(settings, "PUBLIC_WEB_SEARCH_MIN_INTERVAL_SECONDS", 0.75)),
+    )
+
+    with _DIRECT_FETCH_LOCK:
+        now = time.monotonic()
+        wait = min_interval - (now - _LAST_DIRECT_FETCH_MONOTONIC)
+        if wait > 0:
+            time.sleep(wait)
+        _LAST_DIRECT_FETCH_MONOTONIC = time.monotonic()
+        with urlopen(request, timeout=timeout, context=context) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            # Search result pages should be small; bound the read to avoid accidental
+            # unbounded downloads from a changed or intercepted endpoint.
+            body = response.read(2_000_000)
     return body.decode(charset, errors="replace"), tls_backend
 
 
 async def _direct_search(query: str, max_results: int) -> dict[str, Any]:
     timeout = float(getattr(settings, "PUBLIC_WEB_SEARCH_TIMEOUT_SECONDS", 20.0))
     region = str(getattr(settings, "PUBLIC_WEB_SEARCH_REGION", "us-en"))
-    attempts: list[dict[str, str]] = []
 
-    for source, url in _DDG_BACKENDS:
-        try:
-            page, tls_backend = await asyncio.to_thread(
-                _fetch_direct_page,
-                url,
-                query,
-                region,
-                timeout,
-            )
-            results = _parse_duckduckgo_results(page, max_results)
-            attempts.append(
-                {
-                    "backend": source,
-                    "status": "ok" if results else "empty",
-                    "tls_backend": tls_backend,
-                }
-            )
-            if results:
-                return {
-                    "query": query,
-                    "results": results,
-                    "source": source,
-                    "backend": "direct",
-                    "tls_backend": tls_backend,
-                    "attempts": attempts,
-                }
-        except Exception as exc:
-            attempts.append(
-                {
-                    "backend": source,
-                    "status": "error",
-                    "error_type": type(exc).__name__,
-                    "message": str(exc)[:240],
-                }
-            )
+    cached = _cache_get(query, max_results, region)
+    if cached is not None:
+        logger.info("PUBLIC_WEB_SEARCH_CACHE_HIT query_chars=%d", len(query))
+        return cached
+
+    attempts: list[dict[str, Any]] = []
+    empty_retries = max(
+        0,
+        min(int(getattr(settings, "PUBLIC_WEB_SEARCH_EMPTY_RETRIES", 1)), 3),
+    )
+    empty_delay = max(
+        0.0,
+        float(getattr(settings, "PUBLIC_WEB_SEARCH_EMPTY_RETRY_SECONDS", 1.25)),
+    )
+
+    for round_index in range(empty_retries + 1):
+        for source, url in _DDG_BACKENDS:
+            try:
+                page, tls_backend = await asyncio.to_thread(
+                    _fetch_direct_page,
+                    url,
+                    query,
+                    region,
+                    timeout,
+                )
+                results = _parse_duckduckgo_results(page, max_results)
+                attempts.append(
+                    {
+                        "backend": source,
+                        "round": round_index + 1,
+                        "status": "ok" if results else "empty",
+                        "tls_backend": tls_backend,
+                    }
+                )
+                if results:
+                    payload = {
+                        "query": query,
+                        "results": results,
+                        "source": source,
+                        "backend": "direct",
+                        "tls_backend": tls_backend,
+                        "cache": {"hit": False},
+                        "attempts": attempts,
+                    }
+                    _cache_put(query, max_results, region, payload)
+                    return payload
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "backend": source,
+                        "round": round_index + 1,
+                        "status": "error",
+                        "error_type": type(exc).__name__,
+                        "message": str(exc)[:240],
+                    }
+                )
+
+        if round_index < empty_retries and empty_delay > 0:
+            await asyncio.sleep(empty_delay)
 
     return {
         "error": "Search failed",
-        "message": "Direct public search returned no usable results.",
+        "message": "Direct public search returned no usable results after bounded retries.",
         "query": query,
         "backend": "direct",
+        "cache": {"hit": False},
         "attempts": attempts,
     }
 

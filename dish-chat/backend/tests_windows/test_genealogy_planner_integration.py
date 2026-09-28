@@ -113,3 +113,83 @@ def test_real_planner_returns_lineage_unresolved_for_samuel_without_famc(tmp_pat
     assert "Identity matched: Samuel C. Montgomery [@I2@]" in answer.content
     assert "surname or spouse relationship is not proof of branch membership" in answer.content
     assert model.calls == []
+
+
+
+_ANOMALOUS_LILLIE_GEDCOM = """0 HEAD
+0 @I10@ INDI
+1 NAME Lillie Beatrice /Griffith/
+1 SEX F
+1 BIRT
+2 DATE 14 AUG 1923
+1 DEAT
+2 DATE 21 DEC 1989
+1 FAMS @F10@
+0 @I11@ INDI
+1 NAME Everette Luke /Winston/
+1 SEX M
+1 BIRT
+2 DATE 1921
+1 FAMS @F10@
+0 @I12@ INDI
+1 NAME Edward /Turner/
+1 SEX M
+1 BIRT
+2 DATE 1924
+1 FAMC @F10@
+0 @F10@ FAM
+1 HUSB @I11@
+1 WIFE @I10@
+1 CHIL @I12@
+0 TRLR
+"""
+
+
+def test_real_planner_repairs_relationship_consistency_overclaim(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_MODE_WORKDIR", str(tmp_path))
+    ws = tmp_path / "lillie-anomaly-chat" / "ancestry"
+    ws.mkdir(parents=True)
+    archive_path = ws / "Jacob Montgomery family tree.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("Jacob Montgomery family tree.ged", _ANOMALOUS_LILLIE_GEDCOM)
+
+    model = FixtureModel([
+        json.dumps({
+            "action": "final",
+            "final": (
+                "Identity confirmed. The lineage is fully linked and consistent "
+                "with no anomalies."
+            ),
+        }),
+        json.dumps({
+            "action": "final",
+            "final": (
+                "Identity continuity is established for @I10@, but the GEDCOM "
+                "contains a chronology anomaly: Lillie would have been age 1 "
+                "when child Edward Turner was born in 1924. That relationship "
+                "must remain unverified pending source records."
+            ),
+        }),
+    ])
+
+    answer = asyncio.run(run_coverity_tool_loop(
+        model=model,
+        tools=get_tools_set("agent_mode"),
+        messages=[
+            HumanMessage(content="This is ancestry research using a GEDCOM family tree."),
+            HumanMessage(content="Target: Lillie Beatrice Griffith (1923-1989)."),
+            HumanMessage(
+                content=(
+                    "Deep dive into Lillie Beatrice Griffith and verify identity continuity "
+                    "against the raw GEDCOM."
+                )
+            ),
+        ],
+        config={"configurable": {"thread_id": "lillie-anomaly-chat"}},
+        max_steps=3,
+    ))
+
+    assert "chronology anomaly" in answer.content
+    assert "age 1" in answer.content
+    assert "fully linked and consistent" not in answer.content
+    assert len(model.calls) == 2

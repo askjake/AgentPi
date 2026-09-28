@@ -440,6 +440,7 @@ async def probe_public_search() -> dict[str, Any]:
             "backend": result.get("backend"),
             "source": result.get("source"),
             "tls_backend": result.get("tls_backend"),
+            "cache": result.get("cache") or {"hit": False},
             "result_count": len(result.get("results") or []),
         }
         if not check["ok"]:

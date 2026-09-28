@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import zipfile
 
 import pytest
 
@@ -171,4 +172,45 @@ def test_gedcom_path_cannot_escape_workspace(tmp_path, monkeypatch):
             chat_id="chat",
             target_name="Lillie Griffith",
             gedcom_path=str(outside),
+        )
+
+
+
+def test_identity_check_reads_single_gedcom_directly_from_zip(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_MODE_WORKDIR", str(tmp_path))
+    ws = tmp_path / "chat" / "ancestry"
+    ws.mkdir(parents=True)
+    archive_path = ws / "Jacob Montgomery family tree.zip"
+    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("Jacob Montgomery family tree.ged", _GEDCOM)
+
+    report = genealogy.inspect_gedcom_identity(
+        chat_id="chat",
+        target_name="Lillie Beatrice Griffith",
+        expected_birth_year=1923,
+        expected_death_year=1989,
+    )
+
+    assert report["status"] == "conflict"
+    assert report["gedcom_path"] == (
+        "ancestry\\Jacob Montgomery family tree.zip!Jacob Montgomery family tree.ged"
+        if Path("x").anchor == "" and __import__("os").name == "nt"
+        else "ancestry/Jacob Montgomery family tree.zip!Jacob Montgomery family tree.ged"
+    )
+    assert report["candidates"][0]["id"] == "@I1@"
+
+
+def test_zip_with_multiple_gedcom_members_requires_explicit_resolution(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENT_MODE_WORKDIR", str(tmp_path))
+    ws = tmp_path / "chat"
+    ws.mkdir(parents=True)
+    archive_path = ws / "trees.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("one.ged", _GEDCOM)
+        archive.writestr("two.ged", _GEDCOM)
+
+    with pytest.raises(ValueError, match="multiple GEDCOM"):
+        genealogy.inspect_gedcom_identity(
+            chat_id="chat",
+            target_name="Lillie Griffith",
         )

@@ -277,6 +277,14 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------------------
     COVERITY_GATEWAY_URL: str = "http://127.0.0.1:5000"
 
+    # Public web search. Local portable installs have no Coverity gateway
+    # process, so "auto" resolves to direct DuckDuckGo HTML/Lite search.
+    # Non-local/server deployments preserve the legacy gateway path unless
+    # explicitly overridden.
+    PUBLIC_WEB_SEARCH_MODE: Literal["auto", "direct", "gateway"] = "auto"
+    PUBLIC_WEB_SEARCH_TIMEOUT_SECONDS: float = 20.0
+    PUBLIC_WEB_SEARCH_REGION: str = "us-en"
+
     # -------------------------------------------------------------------------
     # SENTRY INTEGRATION - VERIFIED ✅
     # -------------------------------------------------------------------------

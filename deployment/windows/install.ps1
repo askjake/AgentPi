@@ -102,6 +102,11 @@ Set-DotEnvValue $BackendEnv "TOOL_CALL_TIMEOUT" "12000" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_MODE" "direct" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_TIMEOUT_SECONDS" "20" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_REGION" "us-en" -OnlyIfMissing
+Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS" "120" -OnlyIfMissing
+Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES" "64" -OnlyIfMissing
+Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_MIN_INTERVAL_SECONDS" "0.75" -OnlyIfMissing
+Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_EMPTY_RETRY_SECONDS" "1.25" -OnlyIfMissing
+Set-DotEnvValue $BackendEnv "PUBLIC_WEB_SEARCH_EMPTY_RETRIES" "1" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "ENABLE_BETAREPORT_MCP" "false" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "ENABLE_VIEWERSHIP_MCP" "false" -OnlyIfMissing
 Set-DotEnvValue $BackendEnv "ENABLE_LOG_ASSIST_MCP" "false" -OnlyIfMissing

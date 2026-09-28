@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -134,15 +135,30 @@ def test_partial_name_without_dates_stays_ambiguous(workspace):
 
 
 def test_identity_tool_json_contract(workspace):
-    payload = json.loads(genealogy.agent_genealogy_identity_check.func(
-        chat_id="chat",
-        target_name="Lillie Griffith",
-        expected_birth_year=1876,
-        expected_death_year=1948,
-    ))
+    tool = genealogy.agent_genealogy_identity_check
+    fields = getattr(tool.args_schema, "model_fields", None) or getattr(tool.args_schema, "__fields__", {})
+    assert "chat_id" in fields
+    assert "target_name" in fields
+
+    payload = json.loads(asyncio.run(tool.ainvoke({
+        "chat_id": "chat",
+        "target_name": "Lillie Griffith",
+        "expected_birth_year": 1876,
+        "expected_death_year": 1948,
+    })))
 
     assert payload["contract"] == "agentpi-genealogy-identity-v1"
     assert payload["status"] == "match"
+
+
+def test_genealogy_identity_tool_is_bound_in_agent_mode_registry(workspace):
+    from app.agent.agents.tools.registry import get_tools_set
+
+    names = {
+        getattr(tool, "name", getattr(tool, "__name__", ""))
+        for tool in get_tools_set("agent_mode")
+    }
+    assert "agent_genealogy_identity_check" in names
 
 
 def test_gedcom_path_cannot_escape_workspace(tmp_path, monkeypatch):

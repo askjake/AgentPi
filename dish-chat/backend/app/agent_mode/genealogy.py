@@ -37,11 +37,14 @@ def _resolve_gedcom_path(chat_id: str, gedcom_path: str = "") -> Path:
         if not resolved.is_file():
             raise FileNotFoundError(f"GEDCOM file not found: {resolved}")
     else:
-        matches = [
-            p.resolve()
-            for p in ws.rglob("*.ged")
-            if p.is_file() and ".git" not in p.parts and ".venv" not in p.parts
-        ]
+        matches = []
+        for p in ws.rglob("*.ged"):
+            if not p.is_file() or ".git" in p.parts or ".venv" in p.parts:
+                continue
+            resolved_candidate = p.resolve()
+            if resolved_candidate != ws and ws not in resolved_candidate.parents:
+                continue
+            matches.append(resolved_candidate)
         matches = sorted(dict.fromkeys(matches))
         if not matches:
             raise FileNotFoundError("No .ged file found in the conversation workspace")

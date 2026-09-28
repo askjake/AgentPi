@@ -38,7 +38,10 @@ _SEARCH_CONTRACT = "agentpi-public-search-v2"
 _SEARCH_CACHE: "OrderedDict[tuple[str, int, str], tuple[float, dict[str, Any]]]" = OrderedDict()
 _SEARCH_CACHE_LOCK = threading.Lock()
 _DIRECT_FETCH_LOCK = threading.Lock()
+_OBSERVATION_LOCK = threading.Lock()
 _LAST_DIRECT_FETCH_MONOTONIC = 0.0
+_LAST_SUCCESS: dict[str, Any] | None = None
+_LAST_FAILURE: dict[str, Any] | None = None
 
 _DDG_BACKENDS = (
     ("ddg-html", "https://html.duckduckgo.com/html/"),
@@ -221,10 +224,71 @@ def _cache_snapshot() -> dict[str, Any]:
     }
 
 
+def _observation_from_result(result: dict[str, Any]) -> dict[str, Any]:
+    cache = result.get("cache") or {}
+    return {
+        "observed_at_epoch": round(time.time(), 3),
+        "observed_at_monotonic": time.monotonic(),
+        "backend": result.get("backend"),
+        "source": result.get("source"),
+        "tls_backend": result.get("tls_backend"),
+        "cache_hit": bool(cache.get("hit")),
+        "result_count": len(result.get("results") or []),
+        "error": result.get("message") or result.get("error"),
+    }
+
+
+def _record_search_observation(result: dict[str, Any]) -> None:
+    global _LAST_SUCCESS, _LAST_FAILURE
+    observation = _observation_from_result(result)
+    with _OBSERVATION_LOCK:
+        if observation["result_count"] > 0:
+            _LAST_SUCCESS = observation
+        else:
+            _LAST_FAILURE = observation
+
+
+def _public_observation(observation: dict[str, Any] | None) -> dict[str, Any] | None:
+    if observation is None:
+        return None
+    now = time.monotonic()
+    return {
+        "age_seconds": round(max(0.0, now - float(observation["observed_at_monotonic"])), 3),
+        "backend": observation.get("backend"),
+        "source": observation.get("source"),
+        "tls_backend": observation.get("tls_backend"),
+        "cache_hit": bool(observation.get("cache_hit")),
+        "result_count": int(observation.get("result_count") or 0),
+        "error": observation.get("error"),
+    }
+
+
+def _observed_health() -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+    with _OBSERVATION_LOCK:
+        success = copy.deepcopy(_LAST_SUCCESS)
+        failure = copy.deepcopy(_LAST_FAILURE)
+
+    public_success = _public_observation(success)
+    public_failure = _public_observation(failure)
+
+    if success is None and failure is None:
+        return "unknown", public_success, public_failure
+    if success is not None and (failure is None or success["observed_at_monotonic"] >= failure["observed_at_monotonic"]):
+        return "healthy", public_success, public_failure
+
+    # A newer failure after a recent success is degraded, not proof that the
+    # whole search subsystem is down. This is especially important for
+    # scrape-style providers that can return intermittent empty result pages.
+    if success is not None and public_success and public_success["age_seconds"] <= 900.0:
+        return "degraded", public_success, public_failure
+    return "unhealthy", public_success, public_failure
+
+
 def search_runtime_status() -> dict[str, Any]:
     gateway = str(getattr(settings, "COVERITY_GATEWAY_URL", "") or "").rstrip("/")
+    observed_status, last_success, last_failure = _observed_health()
     return {
-        "status": "configured",
+        "status": observed_status,
         "contract": _SEARCH_CONTRACT,
         "loaded_search_source_sha256": _LOADED_SEARCH_SOURCE_SHA256,
         "configured_mode": _configured_search_mode(),
@@ -237,6 +301,9 @@ def search_runtime_status() -> dict[str, Any]:
             else "python-default-openssl"
         ),
         "gateway_url": gateway,
+        "last_success": last_success,
+        "last_failure": last_failure,
+        "diagnostic_mode": "passive_observation",
         "cache": _cache_snapshot(),
         "pacing": {
             "min_interval_seconds": max(
@@ -424,13 +491,15 @@ async def _gateway_search(query: str, max_results: int) -> dict[str, Any]:
 
 async def _perform_search(query: str, max_results: int) -> dict[str, Any]:
     if _effective_search_mode() == "direct":
-        return await _direct_search(query, max_results)
-    return await _gateway_search(query, max_results)
+        result = await _direct_search(query, max_results)
+    else:
+        result = await _gateway_search(query, max_results)
+    _record_search_observation(result)
+    return result
 
 
 async def probe_public_search() -> dict[str, Any]:
-    """Perform repeated non-sensitive runtime searches to test more than one request."""
-    status = search_runtime_status()
+    """Explicit active probe using repeated non-sensitive search requests."""
     checks = []
     for query in ("OpenAI", "Python documentation"):
         result = await _perform_search(query, 1)
@@ -448,6 +517,8 @@ async def probe_public_search() -> dict[str, Any]:
             check["attempts"] = result.get("attempts", [])
         checks.append(check)
 
+    status = search_runtime_status()
+    status["diagnostic_mode"] = "active_probe"
     status["probes"] = checks
     status["probe"] = checks[0]  # Backward-compatible summary.
     status["status"] = "healthy" if all(item["ok"] for item in checks) else "unhealthy"
@@ -455,11 +526,11 @@ async def probe_public_search() -> dict[str, Any]:
 
 
 @tool("public_web_search_status")
-async def public_web_search_status(probe: bool = True) -> str:
-    """Diagnose the configured public web-search backend.
+async def public_web_search_status(probe: bool = False) -> str:
+    """Report observed public-search runtime health.
 
-    With probe=True, performs a generic non-sensitive one-result search and
-    reports the actual backend/source used. No user query is sent.
+    The default is passive and never generates provider traffic. Set probe=True
+    only for an explicit active diagnostic/qualification request.
     """
     data = await probe_public_search() if probe else search_runtime_status()
     return json.dumps(data, indent=2)

@@ -277,7 +277,9 @@ def test_local_public_web_search():
     diagnostic_route = loop[loop.index("LOCAL_ROUTE intent=search_diagnostic"):loop.index("probe = _runtime_probe_payload")]
     assert '{"probe": False}' in diagnostic_route, "chat diagnosis must not generate active provider probes"
     assert "LOCAL_ROUTE intent=public_web_search" in loop, "grounded fresh-search fast-path missing"
-    assert "Public web search result (actual tool output)" in loop, "fresh search still depends on LLM summarization"
+    assert "render_public_search_output" in loop, "fresh search deterministic renderer is not wired into planner"
+    assert "def render_public_search_payload" in search and "def render_public_search_output" in search, "deterministic search renderer missing"
+    assert "Rendered deterministically from the actual search-tool payload" in search, "renderer evidence receipt missing"
     assert "def _looks_like_search_retry_request" in loop, "search retry intent detector missing"
 
 

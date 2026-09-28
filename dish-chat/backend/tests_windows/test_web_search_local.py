@@ -60,7 +60,7 @@ def test_direct_search_falls_back_from_html_to_lite(monkeypatch):
 
     def fake_fetch(url, query, region, timeout):
         calls.append((url, query, region, timeout))
-        return next(pages)
+        return next(pages), "fixture-tls"
 
     monkeypatch.setattr(web_search, "_fetch_direct_page", fake_fetch)
     monkeypatch.setattr(web_search.settings, "PUBLIC_WEB_SEARCH_TIMEOUT_SECONDS", 2.0)
@@ -71,9 +71,10 @@ def test_direct_search_falls_back_from_html_to_lite(monkeypatch):
     assert data["backend"] == "direct"
     assert data["source"] == "ddg-lite"
     assert data["results"][0]["url"] == "https://example.org/beta"
+    assert data["tls_backend"] == "fixture-tls"
     assert data["attempts"] == [
-        {"backend": "ddg-html", "status": "empty"},
-        {"backend": "ddg-lite", "status": "ok"},
+        {"backend": "ddg-html", "status": "empty", "tls_backend": "fixture-tls"},
+        {"backend": "ddg-lite", "status": "ok", "tls_backend": "fixture-tls"},
     ]
     assert [call[1] for call in calls] == ["fixture query", "fixture query"]
     assert [call[2] for call in calls] == ["us-en", "us-en"]
@@ -88,6 +89,7 @@ def test_search_probe_reports_repeated_direct_backend(monkeypatch):
             "query": query,
             "backend": "direct",
             "source": "ddg-html" if query == "OpenAI" else "ddg-lite",
+            "tls_backend": "fixture-tls",
             "results": [{"title": query, "url": "https://example.com", "snippet": "fixture"}],
         }
 
@@ -98,6 +100,7 @@ def test_search_probe_reports_repeated_direct_backend(monkeypatch):
     assert report["effective_mode"] == "direct"
     assert calls == [("OpenAI", 1), ("Python documentation", 1)]
     assert [item["source"] for item in report["probes"]] == ["ddg-html", "ddg-lite"]
+    assert [item["tls_backend"] for item in report["probes"]] == ["fixture-tls", "fixture-tls"]
     assert all(item["ok"] for item in report["probes"])
     assert report["probe"] == report["probes"][0]
 
@@ -137,20 +140,29 @@ def test_direct_fetch_builds_bounded_duckduckgo_request(monkeypatch):
             observed["limit"] = limit
             return _HTML_RESULT.encode("utf-8")
 
-    def fake_urlopen(request, timeout):
+    fixture_context = object()
+
+    def fake_context():
+        return fixture_context, "fixture-trust"
+
+    def fake_urlopen(request, timeout, context):
         observed["url"] = request.full_url
         observed["timeout"] = timeout
         observed["ua"] = request.headers.get("User-agent")
+        observed["context"] = context
         return Response()
 
+    monkeypatch.setattr(web_search, "_build_direct_ssl_context", fake_context)
     monkeypatch.setattr(web_search, "urlopen", fake_urlopen)
-    page = web_search._fetch_direct_page(
+    page, tls_backend = web_search._fetch_direct_page(
         "https://html.duckduckgo.com/html/",
         "hello world",
         "us-en",
         7.0,
     )
     assert page == _HTML_RESULT
+    assert tls_backend == "fixture-trust"
+    assert observed["context"] is fixture_context
     assert "q=hello+world" in observed["url"]
     assert "kl=us-en" in observed["url"]
     assert observed["timeout"] == 7.0
@@ -189,3 +201,24 @@ def test_search_probe_is_unhealthy_when_second_request_fails(monkeypatch):
     assert report["probes"][0]["ok"] is True
     assert report["probes"][1]["ok"] is False
     assert report["probes"][1]["error"] == "fixture second-request failure"
+
+
+def test_windows_tls_context_prefers_truststore(monkeypatch):
+    import types
+
+    created = []
+    fixture_context = object()
+
+    def fake_ssl_context(protocol):
+        created.append(protocol)
+        return fixture_context
+
+    fake_truststore = types.SimpleNamespace(SSLContext=fake_ssl_context)
+    monkeypatch.setitem(__import__("sys").modules, "truststore", fake_truststore)
+    monkeypatch.setattr(web_search.sys, "platform", "win32")
+
+    context, backend = web_search._build_direct_ssl_context()
+
+    assert context is fixture_context
+    assert backend == "windows-cryptoapi-truststore"
+    assert created == [web_search.ssl.PROTOCOL_TLS_CLIENT]

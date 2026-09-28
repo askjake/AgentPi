@@ -427,6 +427,53 @@ def _looks_like_genealogy_identity_request(user_text: str, recent_transcript: st
     return False
 
 
+def _infer_genealogy_expected_years(
+    target_name: str,
+    user_text: str,
+    recent_transcript: str,
+) -> tuple[int | None, int | None]:
+    """Infer already-stated birth/death years near the exact target name."""
+    target = " ".join(str(target_name or "").split()).strip()
+    if not target:
+        return None, None
+
+    corpus = recent_transcript + "\n" + user_text
+    windows: list[str] = []
+    for match in re.finditer(re.escape(target), corpus, re.I):
+        start = max(0, match.start() - 220)
+        end = min(len(corpus), match.end() + 280)
+        windows.append(corpus[start:end])
+    if not windows:
+        return None, None
+
+    birth_values: set[int] = set()
+    death_values: set[int] = set()
+    for window in windows:
+        for match in re.finditer(
+            r"(?<!\d)(1[5-9]\d{2}|20\d{2})\s*[-–—]\s*(1[5-9]\d{2}|20\d{2})(?!\d)",
+            window,
+        ):
+            birth_values.add(int(match.group(1)))
+            death_values.add(int(match.group(2)))
+
+        for match in re.finditer(
+            r"\b(?:born|birth|b\.)\D{0,24}(1[5-9]\d{2}|20\d{2})\b",
+            window,
+            re.I,
+        ):
+            birth_values.add(int(match.group(1)))
+        for match in re.finditer(
+            r"\b(?:died|death|d\.)\D{0,24}(1[5-9]\d{2}|20\d{2})\b",
+            window,
+            re.I,
+        ):
+            death_values.add(int(match.group(1)))
+
+    birth = next(iter(birth_values)) if len(birth_values) == 1 else None
+    death = next(iter(death_values)) if len(death_values) == 1 else None
+    return birth, death
+
+
 def _genealogy_identity_payload(result: Any) -> dict[str, Any] | None:
     if isinstance(result, dict):
         payload = result
@@ -891,6 +938,17 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
             continue
 
         selected = tool_map[tool_name]
+        if selected.name == "agent_genealogy_identity_check" and isinstance(tool_input, dict):
+            target_name = str(tool_input.get("target_name") or "").strip()
+            inferred_birth, inferred_death = _infer_genealogy_expected_years(
+                target_name,
+                user_text,
+                recent_transcript,
+            )
+            if tool_input.get("expected_birth_year") is None and inferred_birth is not None:
+                tool_input["expected_birth_year"] = inferred_birth
+            if tool_input.get("expected_death_year") is None and inferred_death is not None:
+                tool_input["expected_death_year"] = inferred_death
         try:
             result = await _invoke_tool(selected.raw, tool_input, chat_id=chat_id)
             returned_tools.append(selected.name)

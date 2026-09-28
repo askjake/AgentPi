@@ -981,6 +981,18 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
                     "years when available. Only status=match permits identity continuity."
                 )
                 continue
+            if genealogy_lineage_required and genealogy_identity_report is not None:
+                candidate = _matched_genealogy_candidate(genealogy_identity_report)
+                if candidate is not None:
+                    family = candidate.get("family") if isinstance(candidate.get("family"), dict) else {}
+                    parents = family.get("parents") if isinstance(family.get("parents"), list) else []
+                    ancestors = candidate.get("ancestors") if isinstance(candidate.get("ancestors"), list) else []
+                    if not parents and not ancestors:
+                        return AIMessage(
+                            content=_render_genealogy_lineage_unresolved(
+                                genealogy_identity_report
+                            )
+                        )
             return AIMessage(content=str(payload.get("final", "")).strip())
         if action != "tool":
             return AIMessage(content=last_text)

@@ -466,6 +466,7 @@ async def _search_harder(query: str, tool: Any, chat_id: Optional[str],
         queries.append(query + " latest")
     seen: set = set()
     network_dead = False
+    last_tool_text = ""
 
     for qx in queries:
         qx = qx.strip()
@@ -484,6 +485,7 @@ async def _search_harder(query: str, tool: Any, chat_id: Optional[str],
                 break
             return f"Query: {qx}\nError: {exc}"
         text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, default=str)
+        last_tool_text = text
         if re.search(r'("results"\s*:\s*\[[^\]]+\]|https?://|winner|won|score|date)', text, re.I):
             return f"Query: {qx}\n{text}"
 
@@ -501,6 +503,11 @@ async def _search_harder(query: str, tool: Any, chat_id: Optional[str],
         return ("Web search unavailable — this host cannot reach the internet from this network. "
                 "Try internal_search or check connectivity.")
 
+    # Preserve the last structured tool payload (including failure attempts)
+    # so deterministic rendering can show real evidence instead of replacing it
+    # with a generic planner-side sentence.
+    if last_tool_text:
+        return last_tool_text
     return "No search results found after all query variants."
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import html
 import json
 import logging
 from html.parser import HTMLParser
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
 from urllib.request import Request, urlopen
@@ -22,6 +24,8 @@ from app.tools.query_sanitizer import sanitize_query, should_block_query
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+_LOADED_SEARCH_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+_SEARCH_CONTRACT = "agentpi-public-search-v2"
 
 _DDG_BACKENDS = (
     ("ddg-html", "https://html.duckduckgo.com/html/"),
@@ -150,6 +154,8 @@ def search_runtime_status() -> dict[str, Any]:
     gateway = str(getattr(settings, "COVERITY_GATEWAY_URL", "") or "").rstrip("/")
     return {
         "status": "configured",
+        "contract": _SEARCH_CONTRACT,
+        "loaded_search_source_sha256": _LOADED_SEARCH_SOURCE_SHA256,
         "configured_mode": _configured_search_mode(),
         "effective_mode": _effective_search_mode(),
         "local_runtime": bool(getattr(settings, "LOCAL", False)),
@@ -268,19 +274,26 @@ async def _perform_search(query: str, max_results: int) -> dict[str, Any]:
 
 
 async def probe_public_search() -> dict[str, Any]:
-    """Perform a non-sensitive one-result runtime probe for diagnostics."""
+    """Perform repeated non-sensitive runtime searches to test more than one request."""
     status = search_runtime_status()
-    result = await _perform_search("OpenAI", 1)
-    status["probe"] = {
-        "ok": bool(result.get("results")),
-        "backend": result.get("backend"),
-        "source": result.get("source"),
-        "result_count": len(result.get("results") or []),
-    }
-    if not status["probe"]["ok"]:
-        status["probe"]["error"] = result.get("message") or result.get("error")
-        status["probe"]["attempts"] = result.get("attempts", [])
-    status["status"] = "healthy" if status["probe"]["ok"] else "unhealthy"
+    checks = []
+    for query in ("OpenAI", "Python documentation"):
+        result = await _perform_search(query, 1)
+        check = {
+            "query": query,
+            "ok": bool(result.get("results")),
+            "backend": result.get("backend"),
+            "source": result.get("source"),
+            "result_count": len(result.get("results") or []),
+        }
+        if not check["ok"]:
+            check["error"] = result.get("message") or result.get("error")
+            check["attempts"] = result.get("attempts", [])
+        checks.append(check)
+
+    status["probes"] = checks
+    status["probe"] = checks[0]  # Backward-compatible summary.
+    status["status"] = "healthy" if all(item["ok"] for item in checks) else "unhealthy"
     return status
 
 

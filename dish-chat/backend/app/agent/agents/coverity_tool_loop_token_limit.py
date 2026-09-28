@@ -931,7 +931,11 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
 
     model = model or get_model()
     planner_model = _planner_model(model)
-    direct_tool_result = await _maybe_handle_obvious_direct_task(user_text, tool_map, chat_id)
+    direct_tool_result = (
+        None
+        if genealogy_identity_required
+        else await _maybe_handle_obvious_direct_task(user_text, tool_map, chat_id)
+    )
     if direct_tool_result is not None:
         final_text = await _summarize_tool_result(model, user_text, str(direct_tool_result), config=config)
         return AIMessage(content=final_text)

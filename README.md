@@ -401,3 +401,10 @@ Person-specific genealogy work uses a read-only `agent_genealogy_identity_check`
 The identity contract returns `match`, `ambiguous`, `conflict`, or `not_found`. Only `match` permits identity continuity. Known years already present in the conversation are injected into the identity check when the planner omits them; a conflicting or missing expected date prevents a match.
 
 Branch/lineage membership is a separate evidence gate. A surname or spouse relationship is not proof that a person belongs to the main family branch. Branch conclusions require FAMC/parent/ancestor evidence; if the matched record has no such evidence, the planner returns `GENEALOGY_LINEAGE_EVIDENCE_REQUIRED` instead of guessing.
+
+
+### Text-transformation routing boundary
+
+Rewrite, edit, polish, translate, summarize, shorten, expand, and similar requests treat the supplied prompt/template as inert content. Embedded instructions such as `public_web_search`, genealogy research steps, or execution directives do not trigger tools merely because they appear inside text being transformed.
+
+The execution boundary rejects planner tool actions during a text-transformation request. After one rejection the planner is instructed to return a final transformed artifact only; repeated tool attempts fail closed with `TEXT_TRANSFORMATION_PROTOCOL_INVALID`. This prevents prior conversation context (for example, an ancestry/GEDCOM investigation) from leaking into an unrelated rewrite request.

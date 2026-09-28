@@ -5,6 +5,8 @@ import hashlib
 import html
 import json
 import logging
+import ssl
+import sys
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
@@ -160,6 +162,11 @@ def search_runtime_status() -> dict[str, Any]:
         "effective_mode": _effective_search_mode(),
         "local_runtime": bool(getattr(settings, "LOCAL", False)),
         "direct_backends": [name for name, _ in _DDG_BACKENDS],
+        "tls_preference": (
+            "windows-cryptoapi-truststore"
+            if sys.platform == "win32"
+            else "python-default-openssl"
+        ),
         "gateway_url": gateway,
         "note": (
             "Local installs use direct DuckDuckGo HTML/Lite search in auto mode."
@@ -169,16 +176,41 @@ def search_runtime_status() -> dict[str, Any]:
     }
 
 
-def _fetch_direct_page(url: str, query: str, region: str, timeout: float) -> str:
-    """Fetch through urllib so native Windows proxy/trust settings can participate."""
+def _build_direct_ssl_context():
+    """Build a verified TLS context appropriate for the local host.
+
+    On Windows prefer truststore/Windows CryptoAPI so enterprise-managed root
+    certificates use the same native trust policy as other Windows software.
+    Certificate verification and hostname verification remain enabled.
+    """
+    if sys.platform == "win32":
+        try:
+            import truststore
+
+            context = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            return context, "windows-cryptoapi-truststore"
+        except Exception as exc:
+            logger.warning(
+                "Windows truststore TLS context unavailable; falling back to "
+                "Python default verification: %s",
+                type(exc).__name__,
+            )
+
+    context = ssl.create_default_context()
+    return context, "python-default-openssl"
+
+
+def _fetch_direct_page(url: str, query: str, region: str, timeout: float) -> tuple[str, str]:
+    """Fetch through urllib with a verified native/system TLS context."""
     target = f"{url}?{urlencode({'q': query, 'kl': region})}"
     request = Request(target, headers=_DEFAULT_HEADERS, method="GET")
-    with urlopen(request, timeout=timeout) as response:
+    context, tls_backend = _build_direct_ssl_context()
+    with urlopen(request, timeout=timeout, context=context) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         # Search result pages should be small; bound the read to avoid accidental
         # unbounded downloads from a changed or intercepted endpoint.
         body = response.read(2_000_000)
-    return body.decode(charset, errors="replace")
+    return body.decode(charset, errors="replace"), tls_backend
 
 
 async def _direct_search(query: str, max_results: int) -> dict[str, Any]:
@@ -188,7 +220,7 @@ async def _direct_search(query: str, max_results: int) -> dict[str, Any]:
 
     for source, url in _DDG_BACKENDS:
         try:
-            page = await asyncio.to_thread(
+            page, tls_backend = await asyncio.to_thread(
                 _fetch_direct_page,
                 url,
                 query,
@@ -200,6 +232,7 @@ async def _direct_search(query: str, max_results: int) -> dict[str, Any]:
                 {
                     "backend": source,
                     "status": "ok" if results else "empty",
+                    "tls_backend": tls_backend,
                 }
             )
             if results:
@@ -208,6 +241,7 @@ async def _direct_search(query: str, max_results: int) -> dict[str, Any]:
                     "results": results,
                     "source": source,
                     "backend": "direct",
+                    "tls_backend": tls_backend,
                     "attempts": attempts,
                 }
         except Exception as exc:

@@ -303,6 +303,54 @@ def _family_context(
     }
 
 
+def _ancestor_context(
+    candidate: dict[str, Any],
+    individuals: dict[str, dict[str, Any]],
+    families: dict[str, dict[str, Any]],
+    max_depth: int,
+) -> list[dict[str, Any]]:
+    depth_limit = max(0, min(int(max_depth), 8))
+    if depth_limit == 0:
+        return []
+
+    out: list[dict[str, Any]] = []
+    seen: set[str] = {str(candidate.get("id") or "")}
+    queue: list[tuple[str, int, str]] = []
+
+    for fid in candidate.get("famc", []):
+        fam = families.get(fid)
+        if not fam:
+            continue
+        for rid in (fam.get("husb"), fam.get("wife")):
+            if rid:
+                queue.append((rid, 1, str(candidate.get("id") or "")))
+
+    while queue:
+        rid, generation, child_id = queue.pop(0)
+        if not rid or rid in seen or generation > depth_limit:
+            continue
+        seen.add(rid)
+        person = individuals.get(rid)
+        if not person:
+            continue
+        out.append({
+            "id": person["id"],
+            "name": person["name"],
+            "birth_year": person["birth_year"],
+            "death_year": person["death_year"],
+            "generation": generation,
+            "child_id": child_id,
+        })
+        for fid in person.get("famc", []):
+            fam = families.get(fid)
+            if not fam:
+                continue
+            for parent_id in (fam.get("husb"), fam.get("wife")):
+                if parent_id:
+                    queue.append((parent_id, generation + 1, rid))
+    return out
+
+
 def inspect_gedcom_identity(
     *,
     chat_id: str,
@@ -310,6 +358,7 @@ def inspect_gedcom_identity(
     gedcom_path: str = "",
     expected_birth_year: Optional[int] = None,
     expected_death_year: Optional[int] = None,
+    ancestor_depth: int = 4,
 ) -> dict[str, Any]:
     source_label, text = _read_gedcom_source(chat_id, gedcom_path)
 
@@ -351,6 +400,12 @@ def inspect_gedcom_identity(
         candidate["name_match"] = name_match
         candidate["conflicts"] = conflicts
         candidate["family"] = _family_context(person, individuals, families)
+        candidate["ancestors"] = _ancestor_context(
+            person,
+            individuals,
+            families,
+            ancestor_depth,
+        )
         candidates.append(candidate)
 
     candidates.sort(
@@ -382,6 +437,7 @@ def inspect_gedcom_identity(
             "name": _clean_name(target_name),
             "expected_birth_year": expected_birth_year,
             "expected_death_year": expected_death_year,
+            "ancestor_depth": max(0, min(int(ancestor_depth), 8)),
         },
         "gedcom_path": source_label,
         "candidate_count": len(candidates),
@@ -400,6 +456,7 @@ def agent_genealogy_identity_check(
     gedcom_path: str = "",
     expected_birth_year: Optional[int] = None,
     expected_death_year: Optional[int] = None,
+    ancestor_depth: int = 4,
 ) -> str:
     """Resolve a named person against a workspace GEDCOM without merging identities.
 
@@ -414,6 +471,7 @@ def agent_genealogy_identity_check(
             gedcom_path=gedcom_path,
             expected_birth_year=expected_birth_year,
             expected_death_year=expected_death_year,
+            ancestor_depth=ancestor_depth,
         )
     except Exception as exc:
         result = {

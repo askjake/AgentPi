@@ -492,3 +492,169 @@ def test_fresh_search_failure_renders_actual_attempt_evidence(planner):
     assert "ddg-lite r1: empty" in answer.content
     assert "no LLM summarization was used" in answer.content
     assert calls
+
+
+
+def test_genealogy_identity_gate_detection_is_person_specific(planner):
+    context = (
+        "We cloned an ancestry repository containing a GEDCOM family tree. "
+        "Prior research target: Lillie Beatrice Griffith, recorded 1923-1989."
+    )
+    assert planner._looks_like_genealogy_identity_request(
+        "please deep dive into Lillie Beatrice Griffith",
+        context,
+    )
+    assert planner._looks_like_genealogy_identity_request(
+        "do it",
+        context + " Individual record and parents need verification.",
+    )
+    assert not planner._looks_like_genealogy_identity_request(
+        "trace the Griffith branch",
+        "This is ancestry and family tree research.",
+    )
+
+
+def test_genealogy_final_is_blocked_when_identity_tool_is_not_bound(planner):
+    model = Model([
+        json.dumps({
+            "action": "final",
+            "final": "Lillie Griffith born 1876 is the same person and here is the full picture.",
+        })
+    ])
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        model=model,
+        tools=[],
+        messages=[
+            Message("We are researching a GEDCOM family tree for Lillie Beatrice Griffith."),
+            Message("please investigate her parents and spouse"),
+        ],
+        config={"configurable": {"thread_id": "genealogy-missing-tool"}},
+        max_steps=2,
+    ))
+    assert answer.content.startswith("GENEALOGY_IDENTITY_CHECK_REQUIRED:")
+    assert "No same/similar-name record was merged" in answer.content
+
+
+def test_genealogy_conflicting_candidate_cannot_replace_target(planner):
+    identity_calls = []
+
+    async def identity_tool(payload):
+        identity_calls.append(payload)
+        return json.dumps({
+            "contract": "agentpi-genealogy-identity-v1",
+            "status": "conflict",
+            "target": {
+                "name": "Lillie Beatrice Griffith",
+                "expected_birth_year": 1923,
+                "expected_death_year": 1989,
+            },
+            "candidate_count": 1,
+            "candidates": [
+                {
+                    "id": "@I7484@",
+                    "name": "Lillie Griffith",
+                    "birth_year": 1876,
+                    "death_year": 1948,
+                    "conflicts": [
+                        "target name token(s) absent from candidate: beatrice",
+                        "birth year differs: 1876 != 1923",
+                        "death year differs: 1948 != 1989",
+                    ],
+                }
+            ],
+        })
+
+    model = Model([
+        json.dumps({
+            "action": "final",
+            "final": "Here is the full picture: Lillie Griffith was born in 1876.",
+        }),
+        json.dumps({
+            "action": "tool",
+            "tool": "agent_genealogy_identity_check",
+            "input": {
+                "target_name": "Lillie Beatrice Griffith",
+                "expected_birth_year": 1923,
+                "expected_death_year": 1989,
+            },
+        }),
+    ])
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        model=model,
+        tools=[types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=identity_tool)],
+        messages=[
+            Message("This ancestry repo contains a GEDCOM family tree."),
+            Message("Lillie Beatrice Griffith is recorded as 1923-1989."),
+            Message("please deep dive into Lillie Beatrice Griffith"),
+        ],
+        config={"configurable": {"thread_id": "genealogy-conflict"}},
+        max_steps=3,
+    ))
+
+    assert answer.content.startswith("GENEALOGY_IDENTITY_CONTINUITY_CONFLICT")
+    assert "Lillie Beatrice Griffith" in answer.content
+    assert "Lillie Griffith (b. 1876, d. 1948) [@I7484@]" in answer.content
+    assert "birth year differs: 1876 != 1923" in answer.content
+    assert "No candidate was merged into the target identity." in answer.content
+    assert len(identity_calls) == 1
+    assert len(model.calls) == 2
+
+
+def test_genealogy_exact_match_allows_grounded_final(planner):
+    identity_calls = []
+
+    async def identity_tool(payload):
+        identity_calls.append(payload)
+        return json.dumps({
+            "contract": "agentpi-genealogy-identity-v1",
+            "status": "match",
+            "target": {
+                "name": "Lillie Griffith",
+                "expected_birth_year": 1876,
+                "expected_death_year": 1948,
+            },
+            "candidate_count": 1,
+            "candidates": [
+                {
+                    "id": "@I7484@",
+                    "name": "Lillie Griffith",
+                    "birth_year": 1876,
+                    "death_year": 1948,
+                    "name_match": "exact",
+                    "conflicts": [],
+                    "family": {
+                        "spouses": [{"id": "@I4@", "name": "Samuel C. Montgomery"}],
+                    },
+                }
+            ],
+        })
+
+    model = Model([
+        json.dumps({
+            "action": "tool",
+            "tool": "agent_genealogy_identity_check",
+            "input": {
+                "target_name": "Lillie Griffith",
+                "expected_birth_year": 1876,
+                "expected_death_year": 1948,
+            },
+        }),
+        json.dumps({
+            "action": "final",
+            "final": "Identity continuity is established for @I7484@. Samuel C. Montgomery is recorded as her spouse; his own ancestry still needs separate tracing.",
+        }),
+    ])
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        model=model,
+        tools=[types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=identity_tool)],
+        messages=[
+            Message("This is genealogy research in a GEDCOM family tree."),
+            Message("investigate Lillie Griffith born 1876 and her husband"),
+        ],
+        config={"configurable": {"thread_id": "genealogy-match"}},
+        max_steps=3,
+    ))
+
+    assert answer.content.startswith("Identity continuity is established")
+    assert "Samuel C. Montgomery" in answer.content
+    assert len(identity_calls) == 1

@@ -240,6 +240,31 @@ def test_pytest_persistent_inventory_isolation():
     assert "jobs.append(scan_arp(lookup_vendors=request.lookup_vendors))" in passive, "passive scan_arp compatibility call missing"
 
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Local public web search must not depend on an unstarted localhost gateway
+# ─────────────────────────────────────────────────────────────────────────────
+def test_local_public_web_search():
+    search = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/tools/web_search.py")).read_text()
+    config = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/config.py")).read_text()
+    installer = pathlib.Path(os.path.join(REPO, "deployment/windows/install.ps1")).read_text()
+    registry = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/tools/registry.py")).read_text()
+    health = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/health/router.py")).read_text()
+    loop = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
+
+    assert "PUBLIC_WEB_SEARCH_MODE" in config, "search mode setting missing"
+    assert '"auto", "direct", "gateway"' in config, "search mode choices missing"
+    assert 'PUBLIC_WEB_SEARCH_MODE" "direct"' in installer, "Windows installer does not select direct search"
+    assert "html.duckduckgo.com/html/" in search and "lite.duckduckgo.com/lite/" in search, "direct search backends missing"
+    assert "def _fetch_direct_page(" in search and "urlopen(" in search, "native urllib direct-search transport missing"
+    assert "def _parse_duckduckgo_results(" in search, "direct-search parser missing"
+    assert '@tool("public_web_search_status")' in search, "search diagnostics tool missing"
+    assert "public_web_search_status" in registry, "search diagnostics tool is not registered"
+    assert '"/health/search"' in health and "probe_public_search" in health, "search health endpoint missing"
+    assert "def _looks_like_search_diagnostic_request" in loop, "search diagnostic intent detector missing"
+    assert "LOCAL_ROUTE intent=search_diagnostic" in loop, "search diagnostic fast-path missing"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 def _run_standalone() -> int:
     tests = [

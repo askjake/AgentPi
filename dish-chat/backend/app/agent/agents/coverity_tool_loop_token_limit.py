@@ -486,6 +486,65 @@ def _matched_genealogy_candidate(payload: dict[str, Any]) -> dict[str, Any] | No
     return matches[0] if len(matches) == 1 else None
 
 
+def _genealogy_relationship_anomalies(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    candidate = _matched_genealogy_candidate(payload)
+    if candidate is None:
+        return []
+    anomalies = candidate.get("relationship_anomalies")
+    if not isinstance(anomalies, list):
+        return []
+    return [item for item in anomalies if isinstance(item, dict)]
+
+
+def _render_genealogy_relationship_warning(payload: dict[str, Any]) -> str:
+    candidate = _matched_genealogy_candidate(payload) or {}
+    anomalies = _genealogy_relationship_anomalies(payload)
+    name = candidate.get("name") or (
+        payload.get("target", {}).get("name")
+        if isinstance(payload.get("target"), dict)
+        else "requested person"
+    )
+    rid = candidate.get("id")
+    lines = [
+        "GENEALOGY_RELATIONSHIP_ANOMALY_PRESENT",
+        "",
+        f"Identity matched: {name}" + (f" [{rid}]" if rid else ""),
+        (
+            "The person identity is matched, but that does not validate every GEDCOM "
+            "relationship attached to the record."
+        ),
+    ]
+    if anomalies:
+        lines.extend(["", "Relationship chronology anomalies:"])
+        for anomaly in anomalies[:8]:
+            message = str(anomaly.get("message") or "chronology anomaly")
+            severity = str(anomaly.get("severity") or "unknown")
+            lines.append(f"- [{severity}] {message}")
+    lines.extend([
+        "",
+        "Treat the affected parent/child links as unverified until the underlying records are checked.",
+    ])
+    return "\n".join(lines)
+
+
+def _genealogy_final_acknowledges_anomalies(final_text: str) -> bool:
+    return bool(re.search(
+        r"\b(?:anomal(?:y|ies)|conflict|inconsisten|impossible|chronolog|too young|age\s+\d+)\b",
+        final_text,
+        re.I,
+    ))
+
+
+def _genealogy_final_overclaims_consistency(final_text: str) -> bool:
+    return bool(re.search(
+        r"\b(?:fully\s+(?:linked|consistent)|intact\s+and\s+consistent|"
+        r"no\s+(?:ambiguity|conflicts?|anomalies)|lineage\s+is\s+fully\s+linked|"
+        r"all\s+relationships?\s+(?:are|look)\s+consistent)\b",
+        final_text,
+        re.I,
+    ))
+
+
 def _render_genealogy_lineage_unresolved(payload: dict[str, Any]) -> str:
     target = payload.get("target") if isinstance(payload.get("target"), dict) else {}
     candidate = _matched_genealogy_candidate(payload) or {}
@@ -1135,12 +1194,23 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     scratchpad: list[str] = []
     last_text = ""
     protocol_failures = 0
+    genealogy_relationship_repair_failures = 0
     returned_tools: list[str] = []
     if genealogy_identity_report is not None:
         scratchpad.append(
             "GENEALOGY IDENTITY PREFLIGHT COMPLETE (deterministic tool evidence):\n"
             + json.dumps(genealogy_identity_report, ensure_ascii=False)[:SCRATCHPAD_LIMIT]
         )
+        relationship_anomalies = _genealogy_relationship_anomalies(
+            genealogy_identity_report
+        )
+        if relationship_anomalies:
+            scratchpad.append(
+                "RELATIONSHIP CONSISTENCY WARNING: identity status=match does NOT validate "
+                "all family links. The final answer must explicitly report these anomalies "
+                "and must not claim the lineage/relationships are fully consistent:\n"
+                + json.dumps(relationship_anomalies, ensure_ascii=False)[:SCRATCHPAD_LIMIT]
+            )
 
     for _ in range(planner_steps):
         planner_prompt = _build_planner_prompt(user_text, recent_transcript, system_text, normalized_tools, scratchpad, chat_id)
@@ -1179,6 +1249,30 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
                     "years when available. Only status=match permits identity continuity."
                 )
                 continue
+            final_text = str(payload.get("final", "")).strip()
+            if genealogy_identity_report is not None:
+                relationship_anomalies = _genealogy_relationship_anomalies(
+                    genealogy_identity_report
+                )
+                if relationship_anomalies:
+                    if (
+                        _genealogy_final_overclaims_consistency(final_text)
+                        or not _genealogy_final_acknowledges_anomalies(final_text)
+                    ):
+                        genealogy_relationship_repair_failures += 1
+                        if genealogy_relationship_repair_failures >= 2:
+                            return AIMessage(
+                                content=_render_genealogy_relationship_warning(
+                                    genealogy_identity_report
+                                )
+                            )
+                        scratchpad.append(
+                            "RELATIONSHIP CONSISTENCY ERROR: proposed final contradicted or omitted "
+                            "deterministic GEDCOM chronology anomalies. Rewrite the final to explicitly "
+                            "acknowledge the anomalies. Do not say the lineage is fully linked/consistent, "
+                            "or that there are no conflicts/anomalies."
+                        )
+                        continue
             if genealogy_lineage_required and genealogy_identity_report is not None:
                 candidate = _matched_genealogy_candidate(genealogy_identity_report)
                 if candidate is not None:
@@ -1191,7 +1285,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
                                 genealogy_identity_report
                             )
                         )
-            return AIMessage(content=str(payload.get("final", "")).strip())
+            return AIMessage(content=final_text)
         if action != "tool":
             return AIMessage(content=last_text)
 

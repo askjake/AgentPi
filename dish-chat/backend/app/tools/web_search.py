@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import json
 import logging
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import parse_qs, unquote, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse
+from urllib.request import Request, urlopen
 
 import httpx
 from langchain.tools import tool
@@ -161,44 +163,56 @@ def search_runtime_status() -> dict[str, Any]:
     }
 
 
+def _fetch_direct_page(url: str, query: str, region: str, timeout: float) -> str:
+    """Fetch through urllib so native Windows proxy/trust settings can participate."""
+    target = f"{url}?{urlencode({'q': query, 'kl': region})}"
+    request = Request(target, headers=_DEFAULT_HEADERS, method="GET")
+    with urlopen(request, timeout=timeout) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        # Search result pages should be small; bound the read to avoid accidental
+        # unbounded downloads from a changed or intercepted endpoint.
+        body = response.read(2_000_000)
+    return body.decode(charset, errors="replace")
+
+
 async def _direct_search(query: str, max_results: int) -> dict[str, Any]:
     timeout = float(getattr(settings, "PUBLIC_WEB_SEARCH_TIMEOUT_SECONDS", 20.0))
     region = str(getattr(settings, "PUBLIC_WEB_SEARCH_REGION", "us-en"))
     attempts: list[dict[str, str]] = []
 
-    async with httpx.AsyncClient(
-        timeout=timeout,
-        follow_redirects=True,
-        headers=_DEFAULT_HEADERS,
-    ) as client:
-        for source, url in _DDG_BACKENDS:
-            try:
-                response = await client.get(url, params={"q": query, "kl": region})
-                response.raise_for_status()
-                results = _parse_duckduckgo_results(response.text, max_results)
-                attempts.append(
-                    {
-                        "backend": source,
-                        "status": "ok" if results else "empty",
-                    }
-                )
-                if results:
-                    return {
-                        "query": query,
-                        "results": results,
-                        "source": source,
-                        "backend": "direct",
-                        "attempts": attempts,
-                    }
-            except Exception as exc:
-                attempts.append(
-                    {
-                        "backend": source,
-                        "status": "error",
-                        "error_type": type(exc).__name__,
-                        "message": str(exc)[:240],
-                    }
-                )
+    for source, url in _DDG_BACKENDS:
+        try:
+            page = await asyncio.to_thread(
+                _fetch_direct_page,
+                url,
+                query,
+                region,
+                timeout,
+            )
+            results = _parse_duckduckgo_results(page, max_results)
+            attempts.append(
+                {
+                    "backend": source,
+                    "status": "ok" if results else "empty",
+                }
+            )
+            if results:
+                return {
+                    "query": query,
+                    "results": results,
+                    "source": source,
+                    "backend": "direct",
+                    "attempts": attempts,
+                }
+        except Exception as exc:
+            attempts.append(
+                {
+                    "backend": source,
+                    "status": "error",
+                    "error_type": type(exc).__name__,
+                    "message": str(exc)[:240],
+                }
+            )
 
     return {
         "error": "Search failed",

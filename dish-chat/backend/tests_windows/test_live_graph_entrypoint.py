@@ -203,6 +203,9 @@ def test_live_fresh_search_returns_tool_output_without_model(live_graph, monkeyp
         config={"configurable": {"thread_id": "live-search-grounding"}},
     ))
     text = state["messages"][-1].content
-    assert text.startswith("Public web search result (actual tool output):")
-    assert "https://docs.python.org/3.13/" in text
+    assert text.startswith("## Web search results")
+    assert "[Python fixture](https://docs.python.org/3.13/)" in text
+    assert "backend=\`direct\`" in text
+    assert "source=\`ddg-lite\`" in text
+    assert "no LLM summarization was used" in text
     assert provider.calls == 0

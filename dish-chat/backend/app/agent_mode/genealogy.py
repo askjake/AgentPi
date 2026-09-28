@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -11,6 +12,7 @@ from langchain.tools import tool
 
 GENEALOGY_IDENTITY_CONTRACT = "agentpi-genealogy-identity-v1"
 _MAX_GEDCOM_BYTES = 50_000_000
+_MAX_ARCHIVE_BYTES = 100_000_000
 _MAX_CANDIDATES = 20
 
 
@@ -25,6 +27,24 @@ def _workspace(chat_id: str) -> Path:
     return ws
 
 
+def _inside_workspace(ws: Path, path: Path) -> bool:
+    resolved = path.resolve()
+    return resolved == ws or ws in resolved.parents
+
+
+def _zip_gedcom_members(path: Path) -> list[zipfile.ZipInfo]:
+    if path.stat().st_size > _MAX_ARCHIVE_BYTES:
+        raise ValueError(
+            f"Archive is too large for bounded genealogy inspection: {path.stat().st_size} bytes"
+        )
+    with zipfile.ZipFile(path) as archive:
+        return [
+            info
+            for info in archive.infolist()
+            if not info.is_dir() and info.filename.lower().endswith(".ged")
+        ]
+
+
 def _resolve_gedcom_path(chat_id: str, gedcom_path: str = "") -> Path:
     ws = _workspace(chat_id)
     if gedcom_path and str(gedcom_path).strip():
@@ -32,38 +52,89 @@ def _resolve_gedcom_path(chat_id: str, gedcom_path: str = "") -> Path:
         if not candidate.is_absolute():
             candidate = ws / candidate
         resolved = candidate.resolve()
-        if resolved != ws and ws not in resolved.parents:
+        if not _inside_workspace(ws, resolved):
             raise ValueError("GEDCOM path must stay inside the conversation workspace")
         if not resolved.is_file():
-            raise FileNotFoundError(f"GEDCOM file not found: {resolved}")
+            raise FileNotFoundError(f"GEDCOM source not found: {resolved}")
     else:
-        matches = []
+        ged_matches: list[Path] = []
         for p in ws.rglob("*.ged"):
             if not p.is_file() or ".git" in p.parts or ".venv" in p.parts:
                 continue
             resolved_candidate = p.resolve()
-            if resolved_candidate != ws and ws not in resolved_candidate.parents:
-                continue
-            matches.append(resolved_candidate)
-        matches = sorted(dict.fromkeys(matches))
-        if not matches:
-            raise FileNotFoundError("No .ged file found in the conversation workspace")
-        if len(matches) > 1:
-            rel = [str(p.relative_to(ws)) for p in matches[:10]]
+            if _inside_workspace(ws, resolved_candidate):
+                ged_matches.append(resolved_candidate)
+        ged_matches = sorted(dict.fromkeys(ged_matches))
+
+        if len(ged_matches) == 1:
+            resolved = ged_matches[0]
+        elif len(ged_matches) > 1:
+            rel = [str(p.relative_to(ws)) for p in ged_matches[:10]]
             raise ValueError(
                 "Multiple GEDCOM files found; pass gedcom_path explicitly: "
                 + ", ".join(rel)
             )
-        resolved = matches[0]
+        else:
+            zip_matches: list[Path] = []
+            for p in ws.rglob("*.zip"):
+                if not p.is_file() or ".git" in p.parts or ".venv" in p.parts:
+                    continue
+                resolved_candidate = p.resolve()
+                if not _inside_workspace(ws, resolved_candidate):
+                    continue
+                try:
+                    members = _zip_gedcom_members(resolved_candidate)
+                except (OSError, zipfile.BadZipFile, ValueError):
+                    continue
+                if members:
+                    zip_matches.append(resolved_candidate)
+            zip_matches = sorted(dict.fromkeys(zip_matches))
+            if not zip_matches:
+                raise FileNotFoundError(
+                    "No .ged file or ZIP containing a GEDCOM was found in the conversation workspace"
+                )
+            if len(zip_matches) > 1:
+                rel = [str(p.relative_to(ws)) for p in zip_matches[:10]]
+                raise ValueError(
+                    "Multiple archives contain GEDCOM files; pass gedcom_path explicitly: "
+                    + ", ".join(rel)
+                )
+            resolved = zip_matches[0]
 
-    if resolved.suffix.lower() != ".ged":
-        raise ValueError("genealogy identity checks require a .ged file")
-    size = resolved.stat().st_size
-    if size > _MAX_GEDCOM_BYTES:
-        raise ValueError(
-            f"GEDCOM file is too large for bounded identity inspection: {size} bytes"
-        )
+    if resolved.suffix.lower() not in {".ged", ".zip"}:
+        raise ValueError("genealogy identity checks require a .ged file or ZIP containing a GEDCOM")
     return resolved
+
+
+def _read_gedcom_source(chat_id: str, gedcom_path: str = "") -> tuple[str, str]:
+    ws = _workspace(chat_id)
+    path = _resolve_gedcom_path(chat_id, gedcom_path)
+    if path.suffix.lower() == ".ged":
+        size = path.stat().st_size
+        if size > _MAX_GEDCOM_BYTES:
+            raise ValueError(
+                f"GEDCOM file is too large for bounded identity inspection: {size} bytes"
+            )
+        return str(path.relative_to(ws)), path.read_text(encoding="utf-8", errors="replace")
+
+    members = _zip_gedcom_members(path)
+    if not members:
+        raise FileNotFoundError("ZIP does not contain a GEDCOM file")
+    if len(members) > 1:
+        names = [info.filename for info in members[:10]]
+        raise ValueError(
+            "ZIP contains multiple GEDCOM files; extract/select one explicitly: "
+            + ", ".join(names)
+        )
+    info = members[0]
+    if info.file_size > _MAX_GEDCOM_BYTES:
+        raise ValueError(
+            f"GEDCOM member is too large for bounded identity inspection: {info.file_size} bytes"
+        )
+    with zipfile.ZipFile(path) as archive:
+        raw = archive.read(info)
+    label = f"{path.relative_to(ws)}!{info.filename}"
+    return label, raw.decode("utf-8", errors="replace")
 
 
 def _record_blocks(text: str) -> list[str]:
@@ -240,8 +311,7 @@ def inspect_gedcom_identity(
     expected_birth_year: Optional[int] = None,
     expected_death_year: Optional[int] = None,
 ) -> dict[str, Any]:
-    path = _resolve_gedcom_path(chat_id, gedcom_path)
-    text = path.read_text(encoding="utf-8", errors="replace")
+    source_label, text = _read_gedcom_source(chat_id, gedcom_path)
 
     individuals: dict[str, dict[str, Any]] = {}
     families: dict[str, dict[str, Any]] = {}
@@ -309,7 +379,7 @@ def inspect_gedcom_identity(
             "expected_birth_year": expected_birth_year,
             "expected_death_year": expected_death_year,
         },
-        "gedcom_path": str(path.relative_to(_workspace(chat_id))),
+        "gedcom_path": source_label,
         "candidate_count": len(candidates),
         "candidates": candidates,
         "continuity_rule": (

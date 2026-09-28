@@ -155,6 +155,22 @@ def _extract_last_user_text(messages: list[BaseMessage]) -> str:
     return ""
 
 
+def _extract_previous_user_text(messages: list[BaseMessage]) -> str:
+    """Return the user turn immediately before the current/latest user turn."""
+    seen_latest = False
+    for msg in reversed(messages):
+        if getattr(msg, "type", "").lower() not in {"human", "user"}:
+            continue
+        text = _content_to_text(getattr(msg, "content", "")).strip()
+        if not text:
+            continue
+        if not seen_latest:
+            seen_latest = True
+            continue
+        return text
+    return ""
+
+
 def _render_recent_transcript(messages: list[BaseMessage], limit: int = 10) -> str:
     trimmed = messages[-limit:]
     lines: list[str] = []
@@ -284,6 +300,18 @@ def _runtime_probe_payload(user_text: str) -> Optional[dict[str, Any]]:
             "print('Hostname:', socket.gethostname())\n"
             "print('Working directory:', os.getcwd())\n"
         ),
+    }
+
+
+def _looks_like_search_retry_request(user_text: str) -> bool:
+    t = " ".join(user_text.lower().split()).strip(" .!?")
+    return t in {
+        "try again",
+        "retry",
+        "retry search",
+        "search again",
+        "try the search again",
+        "try web search again",
     }
 
 
@@ -638,6 +666,33 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
         return AIMessage(
             content=(
                 "Public web search diagnostics (actual runtime output):\n\n"
+                + _content_to_text(result)
+            )
+        )
+
+    search_query = None
+    if _looks_like_fresh_info_request(user_text):
+        search_query = user_text
+    elif _looks_like_search_retry_request(user_text):
+        previous_user_text = _extract_previous_user_text(messages)
+        if _looks_like_fresh_info_request(previous_user_text):
+            search_query = previous_user_text
+
+    if search_query and "public_web_search" in tool_map:
+        logger.info("LOCAL_ROUTE intent=public_web_search query_chars=%d", len(search_query))
+        result = await _search_harder(
+            search_query,
+            tool_map["public_web_search"].raw,
+            chat_id,
+            fallback_tool=(
+                tool_map["internal_search"].raw
+                if "internal_search" in tool_map
+                else None
+            ),
+        )
+        return AIMessage(
+            content=(
+                "Public web search result (actual tool output):\n\n"
                 + _content_to_text(result)
             )
         )

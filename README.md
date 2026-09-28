@@ -390,3 +390,12 @@ Use `public_web_search_status` or `GET /rest/api/v1/health/search?probe=true` to
 Fresh public-search results remain structured JSON inside the tool boundary, but the chat planner renders that verified payload into Markdown without a second LLM pass. The renderer preserves result titles, validated HTTP(S) links, snippets, backend/source/TLS/cache evidence, and bounded provider-attempt receipts. Result text is Markdown-escaped and link destinations are validated/encoded before display.
 
 Malformed/non-JSON search output fails closed with no inferred links. Structured search failures render their actual backend and attempt evidence instead of being replaced by generic planner prose.
+
+
+### Genealogy identity continuity
+
+Person-specific genealogy work uses a read-only `agent_genealogy_identity_check` gate before a same/similar-name GEDCOM record may be treated as the research target. The tool can inspect a workspace `.ged` directly or read a single GEDCOM from a workspace ZIP without extracting it. Candidate evidence includes GEDCOM ID, name, birth/death dates and places, FAMC/FAMS-derived parents/spouses/children, and a bounded ancestor walk.
+
+The identity contract returns `match`, `ambiguous`, `conflict`, or `not_found`. Only `match` permits identity continuity. Known years already present in the conversation are injected into the identity check when the planner omits them; a conflicting or missing expected date prevents a match.
+
+Branch/lineage membership is a separate evidence gate. A surname or spouse relationship is not proof that a person belongs to the main family branch. Branch conclusions require FAMC/parent/ancestor evidence; if the matched record has no such evidence, the planner returns `GENEALOGY_LINEAGE_EVIDENCE_REQUIRED` instead of guessing.

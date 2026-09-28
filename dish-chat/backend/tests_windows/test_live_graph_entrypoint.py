@@ -182,3 +182,36 @@ def test_search_diagnostic_tool_not_replaced_by_fixture(live_graph):
     status = tools["public_web_search_status"]
     assert getattr(status, "coroutine", None) is not None
     assert getattr(status.coroutine, "__name__", "") == "public_web_search_status"
+
+
+def test_live_fresh_search_returns_tool_output_without_model(live_graph, monkeypatch):
+    rag, _, _, _, provider, HumanMessage, _ = live_graph
+
+    tools = {getattr(t, "name", getattr(t, "__name__", "")): t for t in rag.get_tools_set("search")}
+    public_search = tools["public_web_search"]
+
+    async def fake_search(query, max_results=6, config=None):
+        return (
+            '{"query": "' + query.replace('"', '') + '", '
+            '"backend": "direct", "source": "ddg-lite", '
+            '"results": [{"title": "Python fixture", '
+            '"url": "https://docs.python.org/3.13/", "snippet": "fixture"}]}'
+        )
+
+    monkeypatch.setattr(public_search, "coroutine", fake_search)
+
+    state = asyncio.run(rag.call_model(
+        {
+            "messages": [
+                HumanMessage(
+                    content="search the web for the latest Python 3.13 release notes and give me the source links"
+                )
+            ],
+            "model_config": {},
+        },
+        config={"configurable": {"thread_id": "live-search-grounding"}},
+    ))
+    text = state["messages"][-1].content
+    assert text.startswith("Public web search result (actual tool output):")
+    assert "https://docs.python.org/3.13/" in text
+    assert provider.calls == 0

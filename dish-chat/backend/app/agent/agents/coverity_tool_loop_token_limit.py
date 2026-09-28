@@ -475,6 +475,79 @@ def _render_genealogy_lineage_unresolved(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _extract_genealogy_target_name(
+    user_text: str,
+    recent_transcript: str = "",
+) -> str | None:
+    """Extract the named person under research without guessing from surnames alone."""
+    name = r"[A-Z][A-Za-z'’.-]+(?:\s+(?:[A-Z]\.|[A-Z][A-Za-z'’.-]+)){1,3}"
+    patterns = [
+        rf"\btarget\s*:\s*({name})",
+        rf"\b(?:deep dive into|dig deeper into|investigate|research|look into|trace|verify|resolve|identify)\s+({name})",
+        rf"\b(?:identifies?|identified)\s+({name})\s+(?:as|born|b\.)",
+        rf"\bfor\s+({name})(?:[.,;:]|\s*$)",
+        rf"\b({name})\s*\((?:1[5-9]\d{{2}}|20\d{{2}})\s*[-–—]\s*(?:1[5-9]\d{{2}}|20\d{{2}})\)",
+        rf"\b({name})\s+(?:is|was)\s+(?:recorded|listed|born|identified)\b",
+    ]
+
+    def matches(text: str) -> list[str]:
+        found: list[str] = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, re.I):
+                candidate = " ".join(match.group(1).split()).strip(" .,:;")
+                tokens = candidate.split()
+                lowered = {token.casefold().rstrip(".") for token in tokens}
+                if lowered & {
+                    "the", "this", "that", "existing", "analysis", "gedcom",
+                    "family", "tree", "main", "branch", "raw", "repo", "repository",
+                }:
+                    continue
+                if len(tokens) >= 2:
+                    found.append(candidate)
+        return found
+
+    current = matches(user_text)
+    if current:
+        return current[-1]
+
+    # For pronoun/short follow-ups, prefer the most recently mentioned explicit
+    # person target from the transcript rather than inventing a name.
+    prior = matches(recent_transcript)
+    return prior[-1] if prior else None
+
+
+def _normalize_genealogy_identity_input(
+    tool_input: Any,
+    *,
+    fallback_target_name: str | None,
+    user_text: str,
+    recent_transcript: str,
+) -> dict[str, Any] | None:
+    if isinstance(tool_input, dict):
+        payload = dict(tool_input)
+    elif isinstance(tool_input, str) and tool_input.strip():
+        payload = {"target_name": tool_input.strip()}
+    else:
+        payload = {}
+
+    target_name = str(payload.get("target_name") or fallback_target_name or "").strip()
+    if not target_name:
+        return None
+    payload["target_name"] = target_name
+
+    inferred_birth, inferred_death = _infer_genealogy_expected_years(
+        target_name,
+        user_text,
+        recent_transcript,
+    )
+    if payload.get("expected_birth_year") is None and inferred_birth is not None:
+        payload["expected_birth_year"] = inferred_birth
+    if payload.get("expected_death_year") is None and inferred_death is not None:
+        payload["expected_death_year"] = inferred_death
+    payload.setdefault("ancestor_depth", 4)
+    return payload
+
+
 def _infer_genealogy_expected_years(
     target_name: str,
     user_text: str,
@@ -929,6 +1002,89 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
             return AIMessage(content=f"agent_run_python raised {type(exc).__name__}. No execution output was returned; check the backend tool-dispatch log.")
         return AIMessage(content="Local agent_run_python result (actual executor output):\n\n" + _content_to_text(result))
 
+    genealogy_identity_checked = False
+    genealogy_identity_report: dict[str, Any] | None = None
+    genealogy_target_name: str | None = None
+
+    if genealogy_identity_required:
+        if not chat_id:
+            return AIMessage(content=(
+                "GENEALOGY_IDENTITY_CHECK_REQUIRED: current chat/workspace identity is missing. "
+                "No same/similar-name record was merged into the target identity."
+            ))
+        if "agent_genealogy_identity_check" not in tool_map:
+            return AIMessage(content=(
+                "GENEALOGY_IDENTITY_CHECK_REQUIRED: person-specific genealogy conclusions are blocked "
+                "because agent_genealogy_identity_check is not bound to this conversation. "
+                "No same/similar-name record was merged into the target identity."
+            ))
+
+        genealogy_target_name = _extract_genealogy_target_name(
+            user_text,
+            recent_transcript,
+        )
+        if not genealogy_target_name:
+            return AIMessage(content=(
+                "GENEALOGY_IDENTITY_TARGET_REQUIRED: person-specific genealogy work was requested, "
+                "but no explicit target person could be resolved from the current/prior user turns. "
+                "No identity conclusion was made."
+            ))
+
+        preflight_input = _normalize_genealogy_identity_input(
+            {},
+            fallback_target_name=genealogy_target_name,
+            user_text=user_text,
+            recent_transcript=recent_transcript,
+        )
+        if preflight_input is None:
+            return AIMessage(content=(
+                "GENEALOGY_IDENTITY_TARGET_REQUIRED: the genealogy target could not be normalized. "
+                "No identity conclusion was made."
+            ))
+
+        logger.info(
+            "LOCAL_ROUTE intent=genealogy_identity_preflight target_chars=%d",
+            len(genealogy_target_name),
+        )
+        try:
+            preflight_result = await _invoke_tool(
+                tool_map["agent_genealogy_identity_check"].raw,
+                preflight_input,
+                chat_id=chat_id,
+            )
+        except Exception as exc:
+            return AIMessage(content=(
+                "GENEALOGY_IDENTITY_CHECK_FAILED: the deterministic identity tool raised "
+                f"{type(exc).__name__}. No genealogy identity conclusion is permitted."
+            ))
+
+        genealogy_identity_report = _genealogy_identity_payload(preflight_result)
+        if genealogy_identity_report is None:
+            return AIMessage(content=(
+                "GENEALOGY_IDENTITY_CHECK_INVALID: the deterministic preflight did not return its "
+                "expected agentpi-genealogy-identity-v1 contract. No genealogy identity conclusion is permitted."
+            ))
+        genealogy_identity_checked = True
+
+        identity_status = str(genealogy_identity_report.get("status") or "error")
+        if identity_status != "match":
+            return AIMessage(
+                content=_render_genealogy_identity_block(genealogy_identity_report)
+            )
+
+        if genealogy_lineage_required:
+            candidate = _matched_genealogy_candidate(genealogy_identity_report)
+            if candidate is not None:
+                family = candidate.get("family") if isinstance(candidate.get("family"), dict) else {}
+                parents = family.get("parents") if isinstance(family.get("parents"), list) else []
+                ancestors = candidate.get("ancestors") if isinstance(candidate.get("ancestors"), list) else []
+                if not parents and not ancestors:
+                    return AIMessage(
+                        content=_render_genealogy_lineage_unresolved(
+                            genealogy_identity_report
+                        )
+                    )
+
     model = model or get_model()
     planner_model = _planner_model(model)
     direct_tool_result = (
@@ -945,8 +1101,11 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     last_text = ""
     protocol_failures = 0
     returned_tools: list[str] = []
-    genealogy_identity_checked = False
-    genealogy_identity_report: dict[str, Any] | None = None
+    if genealogy_identity_report is not None:
+        scratchpad.append(
+            "GENEALOGY IDENTITY PREFLIGHT COMPLETE (deterministic tool evidence):\n"
+            + json.dumps(genealogy_identity_report, ensure_ascii=False)[:SCRATCHPAD_LIMIT]
+        )
 
     for _ in range(planner_steps):
         planner_prompt = _build_planner_prompt(user_text, recent_transcript, system_text, normalized_tools, scratchpad, chat_id)
@@ -1008,17 +1167,19 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
             continue
 
         selected = tool_map[tool_name]
-        if selected.name == "agent_genealogy_identity_check" and isinstance(tool_input, dict):
-            target_name = str(tool_input.get("target_name") or "").strip()
-            inferred_birth, inferred_death = _infer_genealogy_expected_years(
-                target_name,
-                user_text,
-                recent_transcript,
+        if selected.name == "agent_genealogy_identity_check":
+            normalized_genealogy_input = _normalize_genealogy_identity_input(
+                tool_input,
+                fallback_target_name=genealogy_target_name,
+                user_text=user_text,
+                recent_transcript=recent_transcript,
             )
-            if tool_input.get("expected_birth_year") is None and inferred_birth is not None:
-                tool_input["expected_birth_year"] = inferred_birth
-            if tool_input.get("expected_death_year") is None and inferred_death is not None:
-                tool_input["expected_death_year"] = inferred_death
+            if normalized_genealogy_input is None:
+                return AIMessage(content=(
+                    "GENEALOGY_IDENTITY_TARGET_REQUIRED: the requested genealogy identity tool call "
+                    "did not contain a usable target person. No identity conclusion was made."
+                ))
+            tool_input = normalized_genealogy_input
         try:
             result = await _invoke_tool(selected.raw, tool_input, chat_id=chat_id)
             returned_tools.append(selected.name)

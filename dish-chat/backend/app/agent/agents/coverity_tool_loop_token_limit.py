@@ -405,7 +405,7 @@ def _looks_like_genealogy_identity_request(user_text: str, recent_transcript: st
         "deep dive", "investigate", "figure out if", "who is", "who was",
         "parents", "father", "mother", "spouse", "husband", "wife",
         "children", "born", "birth", "died", "death", "same person",
-        "connect", "connection", "belongs", "branch",
+        "connect", "connection", "belongs",
     ]
     if any(term in t for term in person_terms):
         return True

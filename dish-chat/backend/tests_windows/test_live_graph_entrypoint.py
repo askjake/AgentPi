@@ -48,12 +48,18 @@ def live_graph(monkeypatch, tmp_path):
     # Real registry bindings must include the real local tool, not a surrogate.
     bound = rag.get_tools_set('agent_mode')
     assert any(t is native.agent_run_python for t in bound)
-    # If stale routing accidentally selects search, fail before any request.
+    # If stale routing accidentally selects an actual search execution tool,
+    # fail before any request. Do NOT replace public_web_search_status: the
+    # diagnostic-routing test below intentionally invokes that local diagnostic
+    # tool with its probe function monkeypatched.
     def forbidden(*args, **kwargs):
         raise AssertionError('Unexpected search request')
     async def async_forbidden(*args, **kwargs):
         raise AssertionError('Unexpected search request')
     for t in rag.get_tools_set('search'):
+        tool_name = getattr(t, 'name', None) or getattr(t, '__name__', None)
+        if tool_name not in {'public_web_search', 'internal_search'}:
+            continue
         if getattr(t, 'func', None) is not None:
             monkeypatch.setattr(t, 'func', forbidden)
         if getattr(t, 'coroutine', None) is not None:
@@ -168,3 +174,11 @@ def test_live_search_diagnostic_bypasses_model(live_graph, monkeypatch):
     assert "Public web search diagnostics (actual runtime output)" in text
     assert '"effective_mode": "direct"' in text
     assert provider.calls == 0
+
+
+def test_search_diagnostic_tool_not_replaced_by_fixture(live_graph):
+    rag, *_ = live_graph
+    tools = {getattr(t, "name", getattr(t, "__name__", "")): t for t in rag.get_tools_set("search")}
+    status = tools["public_web_search_status"]
+    assert getattr(status, "coroutine", None) is not None
+    assert getattr(status.coroutine, "__name__", "") == "public_web_search_status"

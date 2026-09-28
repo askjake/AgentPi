@@ -394,6 +394,8 @@ Malformed/non-JSON search output fails closed with no inferred links. Structured
 
 ### Genealogy identity continuity
 
+Identity continuity and relationship consistency are separate gates. A `status=match` result establishes that a GEDCOM individual record matches the requested person; it does not certify every parent, spouse, child, date, or lineage link attached to that record. Deterministic chronology checks surface high-confidence relationship anomalies (for example, a child birth that would make the matched parent age 1). When such anomalies exist, final synthesis must acknowledge them and cannot claim the lineage is fully linked/consistent or conflict-free.
+
 For person-specific genealogy requests, a deterministic preflight runs before the model planner. The preflight extracts the explicit person target from the current/prior user turns, carries forward already-stated birth/death years, and invokes the identity tool with structured input. Conflicts and lineage-without-ancestor-evidence therefore return before any model/provider synthesis.
 
 Person-specific genealogy work uses a read-only `agent_genealogy_identity_check` gate before a same/similar-name GEDCOM record may be treated as the research target. The tool can inspect a workspace `.ged` directly or read a single GEDCOM from a workspace ZIP without extracting it. Candidate evidence includes GEDCOM ID, name, birth/death dates and places, FAMC/FAMS-derived parents/spouses/children, and a bounded ancestor walk.

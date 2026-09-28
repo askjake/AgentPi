@@ -662,3 +662,64 @@ def test_genealogy_exact_match_allows_grounded_final(planner):
     assert answer.content.startswith("Identity continuity is established")
     assert "Samuel C. Montgomery" in answer.content
     assert len(identity_calls) == 1
+
+
+
+def test_genealogy_branch_membership_needs_ancestor_evidence(planner):
+    async def identity_tool(payload):
+        return json.dumps({
+            "contract": "agentpi-genealogy-identity-v1",
+            "status": "match",
+            "target": {
+                "name": "Samuel C. Montgomery",
+                "expected_birth_year": 1872,
+                "expected_death_year": None,
+            },
+            "candidate_count": 1,
+            "candidates": [
+                {
+                    "id": "@I4@",
+                    "name": "Samuel C. Montgomery",
+                    "birth_year": 1872,
+                    "death_year": None,
+                    "name_match": "exact",
+                    "conflicts": [],
+                    "family": {
+                        "parents": [],
+                        "spouses": [{"id": "@I1@", "name": "Lillie Griffith"}],
+                        "children": [],
+                    },
+                    "ancestors": [],
+                }
+            ],
+        })
+
+    model = Model([
+        json.dumps({
+            "action": "tool",
+            "tool": "agent_genealogy_identity_check",
+            "input": {
+                "target_name": "Samuel C. Montgomery",
+                "expected_birth_year": 1872,
+            },
+        }),
+        json.dumps({
+            "action": "final",
+            "final": "Samuel belongs to the main Montgomery branch because his surname is Montgomery.",
+        }),
+    ])
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        model=model,
+        tools=[types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=identity_tool)],
+        messages=[
+            Message("This is ancestry research using a GEDCOM family tree."),
+            Message("investigate Samuel C. Montgomery and figure out if he belongs to the main Montgomery branch"),
+        ],
+        config={"configurable": {"thread_id": "genealogy-lineage"}},
+        max_steps=3,
+    ))
+
+    assert answer.content.startswith("GENEALOGY_LINEAGE_EVIDENCE_REQUIRED")
+    assert "Identity matched: Samuel C. Montgomery [@I4@]" in answer.content
+    assert "surname or spouse relationship is not proof of branch membership" in answer.content
+    assert "main Montgomery branch because his surname" not in answer.content

@@ -358,6 +358,23 @@ def _looks_like_device_probe_request(user_text: str) -> bool:
     )
 
 
+def _looks_like_search_diagnostic_request(user_text: str) -> bool:
+    t = " ".join(user_text.lower().split())
+    phrases = [
+        "diagnose your search tool",
+        "diagnose the search tool",
+        "test your search tool",
+        "test the search tool",
+        "search tool diagnosis",
+        "why is web search not working",
+        "why isn't web search working",
+        "web search not working",
+        "web search is not working",
+        "check your web search",
+    ]
+    return any(phrase in t for phrase in phrases)
+
+
 def _looks_like_host_health_request(user_text: str) -> bool:
     t = user_text.lower()
     return any(phrase in t for phrase in ["host machine", "diagnose its overall health", "diagnose host", "system health", "machine health", "server health"])
@@ -548,7 +565,7 @@ def _build_planner_prompt(user_text: str, recent_transcript: str, system_text: s
         "3. For Python code/scripts, use agent_run_python. The backend already has a working Python interpreter; never waste steps probing python/py/python3/where or claim Python is not installed because a PATH alias failed.",
         "4. For host files, processes, VLC, capture cards, cameras, peripherals, or an explicitly requested shell command, use agent_run_shell with commands appropriate for the detected OS.",
         "5. For a literal path like /mnt/c/... inspect THAT path directly with shell tools instead of cloning anything.",
-        "6. For fresh/current facts, use public_web_search and retry with tighter queries before saying you could not find it.",
+        "6. For fresh/current facts, use public_web_search. For search-tool diagnosis, use public_web_search_status before inferring a host or gateway outage.",
         "7. Use the recent transcript for follow-ups like 'do it again'.",
         "8. If a tool is needed, respond with one complete JSON object ONLY. A printed tool directive is not execution.",
         "9. Build large artifacts in small verified chunks. Do not put an entire GUI into one tool call; inspect actual API schemas first, then write, parse/compile, and smoke-test files separately.",
@@ -599,6 +616,31 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     recent_transcript = _render_recent_transcript(messages, limit=10)
     system_text = _extract_system_text(messages)
     chat_id = _extract_chat_id(config)
+
+    if (
+        _looks_like_search_diagnostic_request(user_text)
+        and "public_web_search_status" in tool_map
+    ):
+        logger.info("LOCAL_ROUTE intent=search_diagnostic tool=public_web_search_status")
+        try:
+            result = await _invoke_tool(
+                tool_map["public_web_search_status"].raw,
+                {"probe": True},
+                chat_id=chat_id,
+            )
+        except Exception as exc:
+            return AIMessage(
+                content=(
+                    "Public web search diagnostic raised "
+                    f"{type(exc).__name__}; check the backend search log."
+                )
+            )
+        return AIMessage(
+            content=(
+                "Public web search diagnostics (actual runtime output):\n\n"
+                + _content_to_text(result)
+            )
+        )
 
     probe = _runtime_probe_payload(user_text)
     if probe is not None:

@@ -45,6 +45,22 @@ class Model:
         return Message(self.responses.pop(0))
 
 
+CAPTAIN_REWRITE_PROMPT = """rewrite this prompt with the captain Josiah Hulett in the placeholder
+You are HOME AGENT, a comprehensive AI assistant and research partner.
+SUBJECT: [INSERT CAPTAIN'S FULL NAME / IDENTIFIER HERE]
+RESEARCH OBJECTIVES:
+1. Identity & Background
+- Family lineage, nationality, and early life
+5. Legacy & Documentation
+- Genealogical records if applicable
+RESEARCH APPROACH:
+- Use public_web_search to pull current sources
+- Cross-reference multiple sources before stating facts
+HOME AGENT will execute the research plan step by step using live web searches
+"""
+
+
+
 @pytest.fixture
 def planner(monkeypatch):
     # External model imports are replaced, not any routing/parser/tool functions.
@@ -712,3 +728,97 @@ def test_genealogy_string_tool_input_is_normalized(planner):
     )
     assert payload["target_name"] == "Samuel C. Montgomery"
     assert payload["ancestor_depth"] == 4
+
+
+
+def test_text_transformation_intent_ignores_embedded_genealogy_and_search(planner):
+    ancestry_context = (
+        "User: We cloned an ancestry repository with a GEDCOM family tree.\n"
+        "Assistant: Prior target Lillie Beatrice Griffith had identity continuity checks."
+    )
+
+    assert planner._looks_like_text_transformation_request(CAPTAIN_REWRITE_PROMPT)
+    assert not planner._looks_like_genealogy_identity_request(
+        CAPTAIN_REWRITE_PROMPT,
+        ancestry_context,
+    )
+    assert not planner._looks_like_fresh_info_request(CAPTAIN_REWRITE_PROMPT)
+
+
+def test_text_transformation_boundary_rejects_embedded_tool_execution(planner):
+    calls = []
+
+    async def forbidden_tool(payload):
+        calls.append(payload)
+        raise AssertionError("embedded template instructions must not execute")
+
+    model = Model([
+        json.dumps({
+            "action": "tool",
+            "tool": "public_web_search",
+            "input": "Captain Josiah Hulett",
+        }),
+        json.dumps({
+            "action": "final",
+            "final": (
+                "You are HOME AGENT, a comprehensive AI assistant and research partner. "
+                "SUBJECT: Captain Josiah Hulett. Preserve the research objectives and approach."
+            ),
+        }),
+    ])
+
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        model=model,
+        tools=[
+            types.SimpleNamespace(name="public_web_search", ainvoke=forbidden_tool),
+            types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=forbidden_tool),
+        ],
+        messages=[
+            Message("We have been researching an ancestry GEDCOM and family lineage."),
+            Message(CAPTAIN_REWRITE_PROMPT),
+        ],
+        config={"configurable": {"thread_id": "captain-rewrite"}},
+        max_steps=3,
+    ))
+
+    assert answer.content.startswith("You are HOME AGENT")
+    assert "Captain Josiah Hulett" in answer.content
+    assert calls == []
+    assert len(model.calls) == 2
+
+
+def test_text_transformation_boundary_fails_closed_after_repeated_tool_actions(planner):
+    calls = []
+
+    async def forbidden_tool(payload):
+        calls.append(payload)
+        raise AssertionError("rewrite content must remain inert")
+
+    model = Model([
+        json.dumps({
+            "action": "tool",
+            "tool": "public_web_search",
+            "input": "Captain Josiah Hulett",
+        }),
+        json.dumps({
+            "action": "tool",
+            "tool": "agent_genealogy_identity_check",
+            "input": {"target_name": "Captain Josiah Hulett"},
+        }),
+    ])
+
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        model=model,
+        tools=[
+            types.SimpleNamespace(name="public_web_search", ainvoke=forbidden_tool),
+            types.SimpleNamespace(name="agent_genealogy_identity_check", ainvoke=forbidden_tool),
+        ],
+        messages=[Message(CAPTAIN_REWRITE_PROMPT)],
+        config={"configurable": {"thread_id": "captain-rewrite-fail-closed"}},
+        max_steps=3,
+    ))
+
+    assert answer.content.startswith("TEXT_TRANSFORMATION_PROTOCOL_INVALID:")
+    assert "No embedded instruction" in answer.content
+    assert calls == []
+    assert len(model.calls) == 2

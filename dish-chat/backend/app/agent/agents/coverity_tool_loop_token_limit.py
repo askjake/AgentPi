@@ -14,6 +14,7 @@ import logging
 
 from app.core.llm import get_model
 from app.core.llm.coverity_assist_chat_model import CoverityAssistChatModel
+from app.tools.web_search import render_public_search_output
 from .host_context import build_host_context
 
 logger = logging.getLogger(__name__)
@@ -691,9 +692,9 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
             ),
         )
         return AIMessage(
-            content=(
-                "Public web search result (actual tool output):\n\n"
-                + _content_to_text(result)
+            content=render_public_search_output(
+                result,
+                requested_query=search_query,
             )
         )
 

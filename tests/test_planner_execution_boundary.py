@@ -334,3 +334,70 @@ def test_search_diagnostic_uses_status_tool_without_provider(planner):
     assert '"effective_mode": "direct"' in answer.content
     assert '"source": "ddg-html"' in answer.content
     assert calls == [{"probe": True}]
+
+
+def test_fresh_search_returns_actual_tool_output_without_model(planner):
+    calls = []
+
+    async def search_tool(query):
+        calls.append(query)
+        return json.dumps({
+            "query": query,
+            "backend": "direct",
+            "source": "ddg-lite",
+            "cache": {"hit": False},
+            "results": [
+                {
+                    "title": "Python 3.13 fixture",
+                    "url": "https://docs.python.org/3.13/",
+                    "snippet": "fixture release notes",
+                }
+            ],
+        })
+
+    tools = [types.SimpleNamespace(name="public_web_search", ainvoke=search_tool)]
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        tools=tools,
+        messages=[Message("search the web for the latest Python 3.13 release notes and give me the source links")],
+        config={"configurable": {"thread_id": "search-grounding"}},
+    ))
+
+    assert answer.content.startswith("Public web search result (actual tool output):")
+    assert "https://docs.python.org/3.13/" in answer.content
+    assert "All connection attempts failed" not in answer.content
+    assert calls == ["search the web for the latest Python 3.13 release notes and give me the source links"]
+
+
+def test_try_again_reuses_previous_fresh_search_without_model(planner):
+    calls = []
+
+    async def search_tool(query):
+        calls.append(query)
+        return json.dumps({
+            "query": query,
+            "backend": "direct",
+            "source": "ddg-lite",
+            "cache": {"hit": True},
+            "results": [
+                {
+                    "title": "Retry fixture",
+                    "url": "https://python.org/",
+                    "snippet": "fixture",
+                }
+            ],
+        })
+
+    prior = "search the web for the latest Python 3.13 release notes and give me the source links"
+    tools = [types.SimpleNamespace(name="public_web_search", ainvoke=search_tool)]
+    answer = asyncio.run(planner.run_coverity_tool_loop(
+        tools=tools,
+        messages=[
+            Message(prior),
+            Message("try again"),
+        ],
+        config={"configurable": {"thread_id": "search-retry"}},
+    ))
+
+    assert answer.content.startswith("Public web search result (actual tool output):")
+    assert "https://python.org/" in answer.content
+    assert calls == [prior]

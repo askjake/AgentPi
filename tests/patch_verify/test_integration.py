@@ -3,7 +3,7 @@ AgentPi patch integration tests.
 Discovers repo root from its own file location — works on any machine.
 Run from repo root: python3 tests/patch_verify/test_integration.py
 """
-import sys, os, pathlib, re
+import ast, sys, os, pathlib, re
 
 # Repo root = two directories above this file (tests/patch_verify/test_integration.py)
 REPO = str(pathlib.Path(__file__).resolve().parents[2])
@@ -246,6 +246,7 @@ def test_pytest_persistent_inventory_isolation():
 # ─────────────────────────────────────────────────────────────────────────────
 def test_local_public_web_search():
     search = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/tools/web_search.py")).read_text()
+    renderer = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/search_renderer.py")).read_text()
     config = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/config.py")).read_text()
     installer = pathlib.Path(os.path.join(REPO, "deployment/windows/install.ps1")).read_text()
     registry = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/tools/registry.py")).read_text()
@@ -253,6 +254,7 @@ def test_local_public_web_search():
     loop = pathlib.Path(os.path.join(REPO, "dish-chat/backend/app/agent/agents/coverity_tool_loop_token_limit.py")).read_text()
 
     ast.parse(search, filename="dish-chat/backend/app/tools/web_search.py")
+    ast.parse(renderer, filename="dish-chat/backend/app/agent/agents/search_renderer.py")
     assert "PUBLIC_WEB_SEARCH_MODE" in config, "search mode setting missing"
     assert '"auto", "direct", "gateway"' in config, "search mode choices missing"
     assert 'PUBLIC_WEB_SEARCH_MODE" "direct"' in installer, "Windows installer does not select direct search"
@@ -261,8 +263,6 @@ def test_local_public_web_search():
     assert "truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)" in search, "Windows native trust-store TLS context missing"
     assert "CERT_NONE" not in search and "_create_unverified_context" not in search and "verify=False" not in search, "public search must not disable TLS verification"
     assert "def _parse_duckduckgo_results(" in search, "direct-search parser missing"
-    expected_safe_url_line = 'return quote(url, safe=":/?#@!$&\'*+,;=%._~-")'
-    assert expected_safe_url_line in search, "safe encoded Markdown URL destination missing"
     assert "_SEARCH_CACHE" in search and "OrderedDict" in search, "bounded read-only search cache missing"
     assert "PUBLIC_WEB_SEARCH_CACHE_TTL_SECONDS" in search, "search cache TTL missing"
     assert "PUBLIC_WEB_SEARCH_CACHE_MAX_ENTRIES" in search, "search cache bound missing"
@@ -275,14 +275,19 @@ def test_local_public_web_search():
     assert "last_success" in search and "last_failure" in search, "search success/failure observations missing"
     assert "public_web_search_status" in registry, "search diagnostics tool is not registered"
     assert '"/health/search"' in health and "probe_public_search" in health, "search health endpoint missing"
+
+    expected_safe_url_line = 'return quote(url, safe=":/?#@!$&\'*+,;=%._~-")'
+    assert expected_safe_url_line in renderer, "safe encoded Markdown URL destination missing"
+    assert "def render_public_search_payload" in renderer and "def render_public_search_output" in renderer, "deterministic search renderer missing"
+    assert "Rendered deterministically from the actual search-tool payload" in renderer, "renderer evidence receipt missing"
+
     assert "def _looks_like_search_diagnostic_request" in loop, "search diagnostic intent detector missing"
     assert "LOCAL_ROUTE intent=search_diagnostic" in loop, "search diagnostic fast-path missing"
     diagnostic_route = loop[loop.index("LOCAL_ROUTE intent=search_diagnostic"):loop.index("probe = _runtime_probe_payload")]
     assert '{"probe": False}' in diagnostic_route, "chat diagnosis must not generate active provider probes"
     assert "LOCAL_ROUTE intent=public_web_search" in loop, "grounded fresh-search fast-path missing"
+    assert "from app.agent.agents.search_renderer import render_public_search_output" in loop, "planner does not import lightweight deterministic renderer"
     assert "render_public_search_output" in loop, "fresh search deterministic renderer is not wired into planner"
-    assert "def render_public_search_payload" in search and "def render_public_search_output" in search, "deterministic search renderer missing"
-    assert "Rendered deterministically from the actual search-tool payload" in search, "renderer evidence receipt missing"
     assert "def _looks_like_search_retry_request" in loop, "search retry intent detector missing"
 
 

@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 import re
 from typing import Any
+import uuid
 
 from langchain_core.messages import AIMessage
 
@@ -22,7 +23,20 @@ CONTRACT = 'agentpi-live-planner-v1'
 # Captured when imported, NOT reread from a potentially newer checkout per GET.
 LOADED_ENTRYPOINT_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 LOADED_IMPLEMENTATION_SHA256 = hashlib.sha256(Path(implementation.__file__).read_bytes()).hexdigest()
-COUNTERS = {'entered': 0, 'runtime_probe': 0, 'mcop_description': 0, 'artifact_readback': 0}
+MCOP_TOOL_NAMES = (
+    'agent_spawn_task',
+    'agent_spawn_parallel',
+    'agent_check_tasks',
+    'agent_read_task_result',
+    'agent_read_packet',
+)
+COUNTERS = {
+    'entered': 0,
+    'runtime_probe': 0,
+    'mcop_description': 0,
+    'mcop_demo': 0,
+    'artifact_readback': 0,
+}
 
 
 def execution_identity() -> dict:
@@ -30,22 +44,36 @@ def execution_identity() -> dict:
             'implementation_module': implementation.__name__,
             'loaded_entrypoint_sha256': LOADED_ENTRYPOINT_SHA256,
             'loaded_implementation_sha256': LOADED_IMPLEMENTATION_SHA256,
-            'mcop': {'name': 'Multi-Conversation Orchestration Protocol',
-                     'implemented_in_this_revision': False},
+            'mcop': {
+                'name': 'Multi-Conversation Orchestration Protocol',
+                'contract': 'agentpi-mcop-v1',
+                'implemented_in_this_revision': True,
+                'expected_tool_names': list(MCOP_TOOL_NAMES),
+            },
             'calls_since_import': dict(COUNTERS)}
 
 
-def _mcop_question(text: str, messages: list) -> bool:
-    # Do not intercept requests to actually implement or change MCOP.
-    if re.search(r'\b(?:implement|integrate|build|add|enable|disable)\b', text, re.I):
-        return False
-    if re.search(r'\bmcop\b', text, re.I):
+def _mcop_demo_request(text: str, messages: list) -> bool:
+    if re.search(r'\b(?:test|demonstrate|demo|exhibit|show)\b[^\n]{0,120}\bmcop\b', text, re.I):
         return True
-    if re.fullmatch(r'\s*(?:please\s+)?(?:test|demonstrate|exhibit)[\s\w,]*\b(?:it|action)\b[.!?\s]*', text, re.I):
-        previous = [implementation._content_to_text(getattr(m, 'content', ''))
-                    for m in messages if getattr(m, 'type', '') in {'human', 'user'}]
+    if re.fullmatch(r'\s*(?:please\s+)?(?:test|demonstrate|demo|exhibit|show)[\s\w,]*\b(?:it|action)\b[.!?\s]*', text, re.I):
+        previous = [
+            implementation._content_to_text(getattr(m, 'content', ''))
+            for m in messages
+            if getattr(m, 'type', '') in {'human', 'user'}
+        ]
         return len(previous) >= 2 and bool(re.search(r'\bmcop\b', previous[-2], re.I))
     return False
+
+
+def _mcop_question(text: str, messages: list) -> bool:
+    # Implementation/change requests and explicit demonstrations must reach an
+    # execution path rather than being answered by the read-only description.
+    if re.search(r'\b(?:implement|integrate|build|add|enable|disable)\b', text, re.I):
+        return False
+    if _mcop_demo_request(text, messages):
+        return False
+    return bool(re.search(r'\bmcop\b', text, re.I))
 
 
 def _completion_review(text: str, messages: list) -> bool:
@@ -73,18 +101,67 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
     COUNTERS['entered'] += 1
     logger.info('LIVE_PLANNER_ENTRY contract=%s implementation=%s', CONTRACT, implementation.__name__)
 
+    if _mcop_demo_request(text, messages):
+        COUNTERS['mcop_demo'] += 1
+        if not chat_id:
+            return AIMessage(content=(
+                'MCOP_DEMO_BLOCKED: current chat/workspace identity is missing. '
+                'No child conversation was started.'
+            ))
+        normalized = implementation._normalize_tools(tools)
+        tool_map = {tool.name: tool for tool in normalized}
+        selected = tool_map.get('agent_spawn_task')
+        if selected is None:
+            return AIMessage(content=(
+                'MCOP_DEMO_BLOCKED: agent_spawn_task is not bound to this conversation. '
+                'No child conversation was started.'
+            ))
+        task_id = 'mcop-demo-' + uuid.uuid4().hex[:8]
+        demo_prompt = (
+            'Perform a controlled MCOP smoke test. Do not call any tools. '
+            'Return a valid ToolEvidencePacket as your final response. '
+            'Set status to completed, include one high-confidence fact stating '
+            'that the child conversation executed this smoke-test instruction, '
+            'leave raw_artifacts empty, and do not claim any external action.'
+        )
+        try:
+            result = await implementation._invoke_tool(
+                selected.raw,
+                {
+                    'chat_id': chat_id,
+                    'task_prompt': demo_prompt,
+                    'task_id': task_id,
+                    'context_files': '[]',
+                    'max_iters': 2,
+                },
+                chat_id=chat_id,
+            )
+        except Exception as exc:
+            return AIMessage(content=(
+                'MCOP_DEMO_FAILED: agent_spawn_task raised '
+                f'{type(exc).__name__}. No successful child result was returned.'
+            ))
+        return AIMessage(content=(
+            'MCOP demonstration result (actual agent_spawn_task output):\n\n'
+            + implementation._content_to_text(result)
+        ))
+
     if _mcop_question(text, messages):
         COUNTERS['mcop_description'] += 1
         names = sorted({implementation._tool_name(t) for t in tools})
+        bound_mcop = [name for name in MCOP_TOOL_NAMES if name in names]
+        missing_mcop = [name for name in MCOP_TOOL_NAMES if name not in names]
         return AIMessage(content=(
-            'MCOP means Multi-Conversation Orchestration Protocol. It is NOT implemented in this AgentPi revision. '
-            'The repository contains an integration plan, not an operational MCOP worker system. '
-            'No child conversation, parallel worker, or MCOP demonstration was started by this request.\n\n'
-            'Bound tool names for this conversation (binding is not a health or execution test):\n'
-            + ', '.join(names) + '\n\n'
-            'Ordinary Python, network, and inventory tool calls are not evidence of MCOP. '
-            'Shell allowlisting is not an OS security sandbox; optional tools may use remote services. '
-            'The provider/model version and service health are not inferred from this inventory.'
+            'MCOP means Multi-Conversation Orchestration Protocol. It is implemented in this AgentPi revision '
+            'as bounded depth-one child orchestration with durable task/evidence receipts.\n\n'
+            'Bound MCOP tools in this conversation:\n'
+            + (', '.join(bound_mcop) if bound_mcop else '[none]') + '\n\n'
+            + ('Missing expected MCOP bindings: ' + ', '.join(missing_mcop) + '\n\n'
+               if missing_mcop else
+               'All expected MCOP parent tools are bound.\n\n')
+            + 'This description request did not spawn a child. An explicit test/demonstration request '
+            'uses agent_spawn_task and reports its actual bounded result. Binding alone does not prove '
+            'provider readiness or successful execution.'
         ))
     if _completion_review(text, messages):
         return AIMessage(content=await _artifact_observation(chat_id))

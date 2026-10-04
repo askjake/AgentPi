@@ -54,15 +54,32 @@ def execution_identity() -> dict:
 
 
 def _mcop_demo_request(text: str, messages: list) -> bool:
+    # Explicit subject: never depend on conversation history.
     if re.search(r'\b(?:test|demonstrate|demo|exhibit|show)\b[^\n]{0,120}\bmcop\b', text, re.I):
         return True
-    if re.fullmatch(r'\s*(?:please\s+)?(?:test|demonstrate|demo|exhibit|show)[\s\w,]*\b(?:it|action)\b[.!?\s]*', text, re.I):
-        previous = [
-            implementation._content_to_text(getattr(m, 'content', ''))
-            for m in messages
-            if getattr(m, 'type', '') in {'human', 'user'}
-        ]
-        return len(previous) >= 2 and bool(re.search(r'\bmcop\b', previous[-2], re.I))
+
+    # Pronoun follow-up ("test/exhibit it") is only MCOP when recent context
+    # actually names MCOP. Inspect BOTH assistant and user turns; the preceding
+    # MCOP description is normally an assistant message.
+    if re.fullmatch(
+        r'\s*(?:please\s+)?(?:test|demonstrate|demo|exhibit|show)[\s\w,]*\b(?:it|action)\b[.!?\s]*',
+        text,
+        re.I,
+    ):
+        recent: list[str] = []
+        skipped_current = False
+        for message in reversed(messages):
+            content = implementation._content_to_text(getattr(message, 'content', '')).strip()
+            if not content:
+                continue
+            role = getattr(message, 'type', '')
+            if not skipped_current and role in {'human', 'user'} and content == text.strip():
+                skipped_current = True
+                continue
+            recent.append(content)
+            if len(recent) >= 4:
+                break
+        return any(re.search(r'\bmcop\b', item, re.I) for item in recent)
     return False
 
 
@@ -163,9 +180,10 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
             + ('Missing expected MCOP bindings: ' + ', '.join(missing_mcop) + '\n\n'
                if missing_mcop else
                'All expected MCOP parent tools are bound.\n\n')
-            + 'This description request did not spawn a child. An explicit test/demonstration request '
-            'uses agent_spawn_task and reports its actual bounded result. Binding alone does not prove '
-            'provider readiness or successful execution.'
+            + 'This description request did not spawn a child. For an unambiguous live smoke test, say '
+            '"test MCOP in action". A contextual follow-up such as "please test and exhibit it in action" '
+            'also routes to agent_spawn_task when recent conversation context names MCOP. Binding alone '
+            'does not prove provider readiness or successful execution.'
         ))
     if _completion_review(text, messages):
         return AIMessage(content=await _artifact_observation(chat_id))

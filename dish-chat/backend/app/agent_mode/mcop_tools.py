@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 import re
 from typing import Any
 import uuid
@@ -26,6 +27,7 @@ from app.agent_mode.orchestration_packets import TERMINAL_STATUSES
 from app.agent_mode.thought_interceptor import interceptor
 
 IMPLEMENTATION_CONTRACT = MCOP_CONTRACT
+LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DEFAULT_PAGE_SIZE = 10
 _MAX_PAGE_SIZE = 50

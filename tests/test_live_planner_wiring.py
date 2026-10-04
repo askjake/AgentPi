@@ -192,8 +192,10 @@ def test_mcop_description_is_read_only_and_reports_implementation(runtime):
 
 
 def test_mcop_demo_followup_dispatches_exactly_one_spawn(runtime):
+    # Exact live UI shape: the immediately preceding assistant turn names
+    # MCOP; the pronoun follow-up itself does not.
     out = run_chat(runtime, 'please test and exhibit it in action',
-                   [Human('describe your MCOP backend functionality.'), AI('MCOP implementation description')])
+                   [AI('MCOP means Multi-Conversation Orchestration Protocol. It is implemented.')])
     assert out.startswith('MCOP demonstration result (actual agent_spawn_task output)')
     assert 'fixture child executed' in out
     assert len(runtime.mcop_tool.calls) == 1
@@ -204,6 +206,22 @@ def test_mcop_demo_followup_dispatches_exactly_one_spawn(runtime):
     assert call['max_iters'] == 2
     assert 'controlled MCOP smoke test' in call['task_prompt']
     assert runtime.model.calls == 0
+
+
+def test_explicit_mcop_demo_needs_no_history(runtime):
+    out = run_chat(runtime, 'test MCOP in action')
+    assert out.startswith('MCOP demonstration result (actual agent_spawn_task output)')
+    assert len(runtime.mcop_tool.calls) == 1
+    assert runtime.model.calls == 0
+
+
+def test_generic_demo_without_mcop_context_is_not_hijacked(runtime):
+    runtime.model.replies = [json.dumps({'action': 'final', 'final': 'ordinary test response'})]
+    out = run_chat(runtime, 'please test and exhibit it in action',
+                   [AI('Here is the Python application I just described.')])
+    assert out == 'ordinary test response'
+    assert runtime.mcop_tool.calls == []
+    assert runtime.model.calls == 1
 
 
 def test_missing_file_followup_reads_disk_not_assistant_claims(runtime):

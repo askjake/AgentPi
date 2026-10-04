@@ -123,7 +123,12 @@ def runtime(tmp_path):
                 'contract': 'agentpi-mcop-v1',
                 'task_id': payload['task_id'],
                 'status': 'completed',
-                'facts': [{'claim': 'fixture child executed', 'confidence': 'high'}],
+                'iterations_used': 1,
+                'packet_path': f"_mcop/task_{payload['task_id']}/tool_evidence_packet.json",
+                'facts': [{
+                    'claim': f"MCOP_SMOKE_EXECUTED:{payload['task_id']}",
+                    'confidence': 'high',
+                }],
                 'gaps': [],
                 'errors': [],
                 'summary': 'controlled child fixture complete',
@@ -196,8 +201,8 @@ def test_mcop_demo_followup_dispatches_exactly_one_spawn(runtime):
     # MCOP; the pronoun follow-up itself does not.
     out = run_chat(runtime, 'please test and exhibit it in action',
                    [AI('MCOP means Multi-Conversation Orchestration Protocol. It is implemented.')])
-    assert out.startswith('MCOP demonstration result (actual agent_spawn_task output)')
-    assert 'fixture child executed' in out
+    assert out.startswith('MCOP demonstration verified (actual agent_spawn_task output)')
+    assert 'MCOP_SMOKE_EXECUTED:' in out
     assert len(runtime.mcop_tool.calls) == 1
     call = runtime.mcop_tool.calls[0]
     assert call['chat_id'] == 'test-chat'
@@ -210,9 +215,36 @@ def test_mcop_demo_followup_dispatches_exactly_one_spawn(runtime):
 
 def test_explicit_mcop_demo_needs_no_history(runtime):
     out = run_chat(runtime, 'test MCOP in action')
-    assert out.startswith('MCOP demonstration result (actual agent_spawn_task output)')
+    assert out.startswith('MCOP demonstration verified (actual agent_spawn_task output)')
     assert len(runtime.mcop_tool.calls) == 1
     assert runtime.model.calls == 0
+
+
+def test_mcop_demo_rejects_completed_receipt_without_required_fact(runtime):
+    original = runtime.mcop_tool.ainvoke
+
+    async def incomplete(payload):
+        runtime.mcop_tool.calls.append(dict(payload))
+        return json.dumps({
+            'contract': 'agentpi-mcop-v1',
+            'task_id': payload['task_id'],
+            'status': 'completed',
+            'iterations_used': 1,
+            'packet_path': f"_mcop/task_{payload['task_id']}/tool_evidence_packet.json",
+            'facts': [],
+            'gaps': [],
+            'errors': [],
+            'summary': 'looks complete but lacks the deterministic proof fact',
+        })
+
+    runtime.mcop_tool.ainvoke = incomplete
+    try:
+        out = run_chat(runtime, 'test MCOP in action')
+    finally:
+        runtime.mcop_tool.ainvoke = original
+    assert out.startswith('MCOP_DEMO_INCOMPLETE:')
+    assert 'missing required high-confidence fact' in out
+    assert len(runtime.mcop_tool.calls) == 1
 
 
 def test_generic_demo_without_mcop_context_is_not_hijacked(runtime):

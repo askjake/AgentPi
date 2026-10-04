@@ -78,6 +78,13 @@ def test_child_source_uses_shared_live_planner_and_forbids_recursive_mcop():
     assert 'planner_config["configurable"]["mcop_child"] = True' in source
 
 
+def test_deterministic_demo_auto_selects_runtime_verification_profile():
+    tools = (AGENT_MODE / "mcop_tools.py").read_text(encoding="utf-8")
+    assert 'task_id.startswith("mcop-demo-")' in tools
+    assert 'effective_verification_profile = "mcop_smoke_v1"' in tools
+    assert "verification_profile=effective_verification_profile" in tools
+
+
 def test_mcop_receipt_paths_are_portable():
     child = (AGENT_MODE / "child_conversation.py").read_text(encoding="utf-8")
     tools = (AGENT_MODE / "mcop_tools.py").read_text(encoding="utf-8")

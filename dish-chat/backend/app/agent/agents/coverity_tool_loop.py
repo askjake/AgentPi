@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 from typing import Any
 import uuid
+import json
 
 from langchain_core.messages import AIMessage
 
@@ -93,6 +94,61 @@ def _mcop_question(text: str, messages: list) -> bool:
     return bool(re.search(r'\bmcop\b', text, re.I))
 
 
+def _validate_mcop_demo_result(result_text: str, task_id: str) -> tuple[bool, list[str], dict]:
+    """Validate the deterministic MCOP smoke receipt before calling it successful."""
+    reasons: list[str] = []
+    try:
+        payload = json.loads(str(result_text or ""))
+    except Exception:
+        return False, ["spawn result was not valid JSON"], {}
+
+    if not isinstance(payload, dict):
+        return False, ["spawn result was not a JSON object"], {}
+
+    if payload.get("contract") != "agentpi-mcop-v1":
+        reasons.append("unexpected or missing MCOP contract")
+    if payload.get("task_id") != task_id:
+        reasons.append("task_id mismatch")
+    if payload.get("status") != "completed":
+        reasons.append(f"status={payload.get('status')!r}, expected 'completed'")
+
+    try:
+        iterations = int(payload.get("iterations_used") or 0)
+    except Exception:
+        iterations = 0
+    if iterations < 1:
+        reasons.append("child did not complete an agent iteration")
+
+    gaps = payload.get("gaps")
+    errors = payload.get("errors")
+    if gaps not in ([], None):
+        reasons.append("child reported evidence gaps")
+    if errors not in ([], None):
+        reasons.append("child reported errors")
+
+    packet_path = payload.get("packet_path")
+    if not isinstance(packet_path, str) or not packet_path.endswith("/tool_evidence_packet.json"):
+        reasons.append("durable tool_evidence_packet path missing")
+
+    expected_claim = f"MCOP_SMOKE_EXECUTED:{task_id}"
+    facts = payload.get("facts")
+    fact_ok = False
+    if isinstance(facts, list):
+        for fact in facts:
+            if not isinstance(fact, dict):
+                continue
+            if (
+                str(fact.get("claim") or "") == expected_claim
+                and str(fact.get("confidence") or "").lower() == "high"
+            ):
+                fact_ok = True
+                break
+    if not fact_ok:
+        reasons.append(f"missing required high-confidence fact {expected_claim!r}")
+
+    return not reasons, reasons, payload
+
+
 def _completion_review(text: str, messages: list) -> bool:
     if not re.search(r'\b(?:did you finish|is it (?:done|finished|complete)|where (?:are|is) (?:the |my )?(?:files?|app|shortcut)|were the files written)\b', text, re.I):
         return False
@@ -138,12 +194,14 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
                 'No child conversation was started.'
             ))
         task_id = 'mcop-demo-' + uuid.uuid4().hex[:8]
+        expected_claim = f'MCOP_SMOKE_EXECUTED:{task_id}'
         demo_prompt = (
             'Perform a controlled MCOP smoke test. Do not call any tools. '
-            'Return a valid ToolEvidencePacket as your final response. '
-            'Set status to completed, include one high-confidence fact stating '
-            'that the child conversation executed this smoke-test instruction, '
-            'leave raw_artifacts empty, and do not claim any external action.'
+            'Return a valid ToolEvidencePacket as your final child evidence. '
+            'Set status to completed. Include exactly one high-confidence fact '
+            f'whose claim is exactly {expected_claim!r}. '
+            'Leave raw_artifacts empty, gaps empty, and errors empty. '
+            'Do not claim any external action.'
         )
         try:
             result = await implementation._invoke_tool(
@@ -162,9 +220,18 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
                 'MCOP_DEMO_FAILED: agent_spawn_task raised '
                 f'{type(exc).__name__}. No successful child result was returned.'
             ))
+        result_text = implementation._content_to_text(result)
+        ok, reasons, payload = _validate_mcop_demo_result(result_text, task_id)
+        if not ok:
+            return AIMessage(content=(
+                'MCOP_DEMO_INCOMPLETE: agent_spawn_task returned a real child receipt, '
+                'but it did not satisfy the deterministic smoke-test acceptance contract.\n'
+                'Reasons: ' + '; '.join(reasons) + '\n\n'
+                'Actual agent_spawn_task output:\n' + result_text
+            ))
         return AIMessage(content=(
-            'MCOP demonstration result (actual agent_spawn_task output):\n\n'
-            + implementation._content_to_text(result)
+            'MCOP demonstration verified (actual agent_spawn_task output):\n\n'
+            + json.dumps(payload, ensure_ascii=False)
         ))
 
     if not is_mcop_child and _mcop_question(text, messages):

@@ -141,6 +141,7 @@ def test_live_mcop_pronoun_demo_uses_assistant_context(live_graph, monkeypatch):
             'facts': [{
                 'claim': f"MCOP_SMOKE_EXECUTED:{task_id}",
                 'confidence': 'high',
+                'source': 'agentpi_mcop_runtime',
             }],
             'gaps': [],
             'errors': [],
@@ -186,6 +187,7 @@ def test_live_mcop_demo_dispatches_one_real_bound_spawn_tool(live_graph, monkeyp
             'facts': [{
                 'claim': f"MCOP_SMOKE_EXECUTED:{task_id}",
                 'confidence': 'high',
+                'source': 'agentpi_mcop_runtime',
             }],
             'gaps': [],
             'errors': [],

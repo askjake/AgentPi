@@ -140,6 +140,7 @@ def _validate_mcop_demo_result(result_text: str, task_id: str) -> tuple[bool, li
             if (
                 str(fact.get("claim") or "") == expected_claim
                 and str(fact.get("confidence") or "").lower() == "high"
+                and str(fact.get("source") or "") == "agentpi_mcop_runtime"
             ):
                 fact_ok = True
                 break

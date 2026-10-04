@@ -166,13 +166,16 @@ async def agent_spawn_task(
                 "result_code": "BLOCKED_EMPTY_TASK",
             })
         interceptor.thought(f"MCOP parent spawning task {task_id}", "orchestrator")
+        effective_verification_profile = str(verification_profile or "")
+        if not effective_verification_profile and task_id.startswith("mcop-demo-"):
+            effective_verification_profile = "mcop_smoke_v1"
         result = await run_child_conversation(
             parent_chat_id=chat_id,
             task_id=task_id,
             prompt=str(task_prompt),
             context_files=files,
             max_iters=max(1, min(int(max_iters), MCOP_CHILD_MAX_ITERS)),
-            verification_profile=str(verification_profile or ""),
+            verification_profile=effective_verification_profile,
         )
         return _json(_result_payload(result))
     except Exception as exc:

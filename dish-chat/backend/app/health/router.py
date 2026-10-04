@@ -49,12 +49,35 @@ async def execution_health_check() -> dict:
     """Identify the LOADED chat/agent bindings; no tool or provider is invoked."""
     import os
     from app.agent.agents import agentic_rag, coverity_tool_loop
-    from app.agent_mode import agent
+    from app.agent_mode import agent, child_conversation, mcop_tools, orchestration_packets
     identity = coverity_tool_loop.execution_identity()
     identity['chat_binding_matches'] = agentic_rag.run_coverity_tool_loop is coverity_tool_loop.run_coverity_tool_loop
     identity['agent_mode_binding_matches'] = agent.run_coverity_tool_loop is coverity_tool_loop.run_coverity_tool_loop
+
+    expected_mcop = set(coverity_tool_loop.MCOP_TOOL_NAMES)
+    agent_mode_names = {
+        str(getattr(tool, 'name', '') or '')
+        for tool in agentic_rag.get_tools_set('agent_mode')
+    }
+    mcop = identity.setdefault('mcop', {})
+    mcop.update({
+        'registry_binding_matches': expected_mcop.issubset(agent_mode_names),
+        'bound_tool_names': sorted(expected_mcop & agent_mode_names),
+        'max_depth': child_conversation.MCOP_MAX_DEPTH,
+        'max_children': child_conversation.MCOP_MAX_CHILDREN,
+        'parallel_limit': child_conversation.MCOP_PARALLEL_LIMIT,
+        'loaded_child_sha256': child_conversation.LOADED_SOURCE_SHA256,
+        'loaded_tools_sha256': mcop_tools.LOADED_SOURCE_SHA256,
+        'loaded_packets_sha256': orchestration_packets.LOADED_SOURCE_SHA256,
+    })
     identity['pid'] = os.getpid()
-    identity['status'] = 'binding_verified' if identity['chat_binding_matches'] and identity['agent_mode_binding_matches'] else 'binding_mismatch'
+    identity['status'] = (
+        'binding_verified'
+        if identity['chat_binding_matches']
+        and identity['agent_mode_binding_matches']
+        and mcop['registry_binding_matches']
+        else 'binding_mismatch'
+    )
     # Deliberately excludes credentials, URLs, user paths and conversation IDs.
     return identity
 

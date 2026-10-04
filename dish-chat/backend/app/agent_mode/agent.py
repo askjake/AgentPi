@@ -73,9 +73,9 @@ async def agent_mode_node(state: AgentModeState, config: dict[str, Any] | None =
         )
     )
 
-    # Choose model – allow an explicit override but fall back to the default chat model.
-    model_arn = settings.AGENT_MODE_MODEL or None
-    model = get_model(model_arn=model_arn)
+    # AgentPi's model factory owns provider/model selection via Settings.
+    # Its public API accepts only the optional efficient= flag.
+    model = get_model()
     set_model_config(
         model,
         {

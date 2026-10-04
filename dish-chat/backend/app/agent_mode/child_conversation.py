@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -37,6 +38,7 @@ from app.agent_mode.orchestration_packets import (
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 MCOP_CONTRACT = "agentpi-mcop-v1"
 MCOP_MAX_DEPTH = 1

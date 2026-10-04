@@ -75,3 +75,20 @@ def test_child_source_uses_shared_live_planner_and_forbids_recursive_mcop():
     ):
         assert name in source
     assert 'return _filter_child_tools(get_tools_set("agent_mode"))' in source
+    assert 'planner_config["configurable"]["mcop_child"] = True' in source
+
+
+def test_live_registry_and_entrypoint_declare_mcop_contract():
+    registry = (BACKEND / "app" / "agent" / "agents" / "tools" / "registry.py").read_text(encoding="utf-8")
+    live = (BACKEND / "app" / "agent" / "agents" / "coverity_tool_loop.py").read_text(encoding="utf-8")
+    for name in (
+        "agent_spawn_task",
+        "agent_spawn_parallel",
+        "agent_check_tasks",
+        "agent_read_task_result",
+        "agent_read_packet",
+    ):
+        assert name in registry
+        assert name in live
+    assert "'implemented_in_this_revision': True" in live
+    assert "'contract': 'agentpi-mcop-v1'" in live

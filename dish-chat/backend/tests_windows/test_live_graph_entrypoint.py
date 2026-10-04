@@ -36,8 +36,13 @@ def live_graph(monkeypatch, tmp_path):
             self.calls += 1
             raise AssertionError('Local diagnostic must not invoke any model')
     provider = NoProvider()
-    monkeypatch.setattr(rag, 'get_model', lambda **kw: provider)
-    monkeypatch.setattr(mode, 'get_model', lambda **kw: provider)
+    def strict_get_model(*args, **kwargs):
+        assert args == ()
+        assert kwargs == {}
+        return provider
+
+    monkeypatch.setattr(rag, 'get_model', strict_get_model)
+    monkeypatch.setattr(mode, 'get_model', strict_get_model)
     monkeypatch.setattr(rag, 'set_model_config', lambda *a: None)
     monkeypatch.setattr(mode, 'set_model_config', lambda *a: None)
     monkeypatch.setattr(native, 'BASE_AGENT_WORKDIR', str(tmp_path))

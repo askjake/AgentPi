@@ -237,6 +237,7 @@ async def _child_agent_node(state: ChildState, config: dict[str, Any] | None = N
         planner_config = dict(config or {})
         planner_config["configurable"] = dict(planner_config.get("configurable", {}))
         planner_config["configurable"]["thread_id"] = state["chat_id"]
+        planner_config["configurable"]["mcop_child"] = True
         response = await run_coverity_tool_loop(
             model=model,
             tools=tools,

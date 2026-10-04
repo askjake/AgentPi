@@ -111,7 +111,26 @@ def runtime(tmp_path):
             done = await asyncio.to_thread(subprocess.run, [sys.executable, str(script)],
                                           cwd=workspace, capture_output=True, text=True, timeout=10)
             return f'return code={done.returncode}\n{done.stdout}{done.stderr}'
-    tools = [LocalTool(), types.SimpleNamespace(name='public_web_search', ainvoke=unexpected)]
+
+    class McopTool:
+        name = 'agent_spawn_task'
+        description = 'Controlled MCOP child-spawn fixture'
+        def __init__(self):
+            self.calls = []
+        async def ainvoke(self, payload):
+            self.calls.append(dict(payload))
+            return json.dumps({
+                'contract': 'agentpi-mcop-v1',
+                'task_id': payload['task_id'],
+                'status': 'completed',
+                'facts': [{'claim': 'fixture child executed', 'confidence': 'high'}],
+                'gaps': [],
+                'errors': [],
+                'summary': 'controlled child fixture complete',
+            })
+
+    mcop_tool = McopTool()
+    tools = [LocalTool(), mcop_tool, types.SimpleNamespace(name='public_web_search', ainvoke=unexpected)]
     mod('app.agent.agents.tools', get_tools_set=lambda kind: tools if kind == 'agent_mode' else [])
     mod('app.agent_mode.tools', BASE_AGENT_WORKDIR=str(tmp_path))
     try:
@@ -121,7 +140,7 @@ def runtime(tmp_path):
         live = importlib.import_module('app.agent.agents.coverity_tool_loop')
         impl = importlib.import_module('app.agent.agents.coverity_tool_loop_token_limit')
         yield types.SimpleNamespace(rag=rag, mode=mode, live=live, impl=impl, model=model,
-                                    tools=tools, base=tmp_path)
+                                    tools=tools, mcop_tool=mcop_tool, base=tmp_path)
     finally:
         monkeypatch.undo()
         for key in list(sys.modules):
@@ -161,18 +180,29 @@ def test_real_agent_mode_node_uses_same_planner(runtime):
     assert runtime.model.calls == 0
 
 
-def test_mcop_description_is_not_a_fabricated_demonstration(runtime):
+def test_mcop_description_is_read_only_and_reports_implementation(runtime):
     out = run_chat(runtime, 'describe your MCOP backend functionality.')
     assert 'Multi-Conversation Orchestration Protocol' in out
-    assert 'NOT implemented' in out
+    assert 'implemented in this AgentPi revision' in out
+    assert 'agent_spawn_task' in out
+    assert 'This description request did not spawn a child' in out
     assert 'Multi-Channel' not in out
+    assert runtime.mcop_tool.calls == []
     assert runtime.model.calls == 0
 
 
-def test_mcop_demo_followup_does_not_run_random_tools(runtime):
+def test_mcop_demo_followup_dispatches_exactly_one_spawn(runtime):
     out = run_chat(runtime, 'please test and exhibit it in action',
-                   [Human('describe your MCOP backend functionality.'), AI('Misleading old answer')])
-    assert 'No child conversation' in out
+                   [Human('describe your MCOP backend functionality.'), AI('MCOP implementation description')])
+    assert out.startswith('MCOP demonstration result (actual agent_spawn_task output)')
+    assert 'fixture child executed' in out
+    assert len(runtime.mcop_tool.calls) == 1
+    call = runtime.mcop_tool.calls[0]
+    assert call['chat_id'] == 'test-chat'
+    assert call['task_id'].startswith('mcop-demo-')
+    assert call['context_files'] == '[]'
+    assert call['max_iters'] == 2
+    assert 'controlled MCOP smoke test' in call['task_prompt']
     assert runtime.model.calls == 0
 
 
@@ -207,7 +237,8 @@ def test_model_cannot_certify_missing_local_artifact(runtime):
 def test_contract_identifies_loaded_implementation(runtime):
     info = runtime.live.execution_identity()
     assert info['contract'] == 'agentpi-live-planner-v1'
-    assert info['mcop']['implemented_in_this_revision'] is False
+    assert info['mcop']['implemented_in_this_revision'] is True
+    assert info['mcop']['contract'] == 'agentpi-mcop-v1'
     assert info['loaded_implementation_sha256'] == hashlib.sha256(Path(runtime.impl.__file__).read_bytes()).hexdigest()
     assert 'bearer' not in json.dumps(info).lower()
 
@@ -258,6 +289,15 @@ def test_verifier_rejects_old_runtime_hash(runtime):
     module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
     report=runtime.live.execution_identity()
     report.update(chat_binding_matches=True, agent_mode_binding_matches=True)
+    mcop_root = ROOT/'dish-chat/backend/app/agent_mode'
+    report['mcop'].update({
+        'registry_binding_matches': True,
+        'bound_tool_names': list(runtime.live.MCOP_TOOL_NAMES),
+        'max_depth': 1,
+        'loaded_child_sha256': hashlib.sha256((mcop_root/'child_conversation.py').read_bytes()).hexdigest(),
+        'loaded_tools_sha256': hashlib.sha256((mcop_root/'mcop_tools.py').read_bytes()).hexdigest(),
+        'loaded_packets_sha256': hashlib.sha256((mcop_root/'orchestration_packets.py').read_bytes()).hexdigest(),
+    })
     module.verify(ROOT,report)
     report['loaded_entrypoint_sha256']='0'*64
     with pytest.raises(ValueError,match='Running process/source mismatch'):

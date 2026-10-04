@@ -24,12 +24,17 @@ echo === PYTHON SOURCE SYNTAX ===
   dish-chat\backend\app\agent_mode\orchestration_packets.py ^
   dish-chat\backend\app\agent_mode\child_conversation.py ^
   dish-chat\backend\app\agent_mode\mcop_tools.py ^
+  dish-chat\backend\app\agent_mode\agent.py ^
+  dish-chat\backend\app\agent\agents\tools\registry.py ^
   dish-chat\backend\app\agent\agents\search_renderer.py ^
-  dish-chat\backend\app\agent\agents\coverity_tool_loop_token_limit.py
+  dish-chat\backend\app\agent\agents\coverity_tool_loop.py ^
+  dish-chat\backend\app\agent\agents\coverity_tool_loop_token_limit.py ^
+  dish-chat\backend\app\health\router.py ^
+  deployment\windows\verify-live-planner.py
 if errorlevel 1 goto failed
 
-echo === FOCUSED MCOP PHASE-A TESTS ===
-.venv-windows\Scripts\python.exe -m pytest -q tests\test_mcop_port.py
+echo === FOCUSED MCOP PORT TESTS ===
+.venv-windows\Scripts\python.exe -m pytest -q tests\test_mcop_port.py tests\test_live_planner_wiring.py
 if errorlevel 1 goto failed
 
 echo === FOCUSED EXECUTION-BOUNDARY TESTS ===

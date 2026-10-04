@@ -120,6 +120,7 @@ def test_coverity_child_calls_shared_live_planner_with_parent_workspace(monkeypa
     async def fake_loop(*, model, tools, messages, config, max_steps, **kwargs):
         calls["tools"] = tools
         calls["thread_id"] = config["configurable"]["thread_id"]
+        calls["mcop_child"] = config["configurable"].get("mcop_child")
         calls["max_steps"] = max_steps
         return AIMessage(content=json.dumps({
             "packet_type": "tool_evidence",
@@ -154,6 +155,7 @@ def test_coverity_child_calls_shared_live_planner_with_parent_workspace(monkeypa
         {"configurable": {"thread_id": "ephemeral-child-thread"}},
     ))
     assert calls["thread_id"] == "parent-chat"
+    assert calls["mcop_child"] is True
     assert calls["max_steps"] == 3
     assert MCOP_NAMES.isdisjoint({getattr(tool, "name", "") for tool in calls["tools"]})
     assert answer["iterations"] == 1

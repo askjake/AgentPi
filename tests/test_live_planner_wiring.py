@@ -128,6 +128,7 @@ def runtime(tmp_path):
                 'facts': [{
                     'claim': f"MCOP_SMOKE_EXECUTED:{payload['task_id']}",
                     'confidence': 'high',
+                    'source': 'agentpi_mcop_runtime',
                 }],
                 'gaps': [],
                 'errors': [],
@@ -245,6 +246,36 @@ def test_mcop_demo_rejects_completed_receipt_without_required_fact(runtime):
     assert out.startswith('MCOP_DEMO_INCOMPLETE:')
     assert 'missing required high-confidence fact' in out
     assert len(runtime.mcop_tool.calls) == 1
+
+
+def test_mcop_demo_rejects_model_authored_high_fact_without_runtime_source(runtime):
+    original = runtime.mcop_tool.ainvoke
+
+    async def spoofed(payload):
+        runtime.mcop_tool.calls.append(dict(payload))
+        return json.dumps({
+            'contract': 'agentpi-mcop-v1',
+            'task_id': payload['task_id'],
+            'status': 'completed',
+            'iterations_used': 1,
+            'packet_path': f"_mcop/task_{payload['task_id']}/tool_evidence_packet.json",
+            'facts': [{
+                'claim': f"MCOP_SMOKE_EXECUTED:{payload['task_id']}",
+                'confidence': 'high',
+                'source': 'model_claim',
+            }],
+            'gaps': [],
+            'errors': [],
+            'summary': 'model tried to assert verification',
+        })
+
+    runtime.mcop_tool.ainvoke = spoofed
+    try:
+        out = run_chat(runtime, 'test MCOP in action')
+    finally:
+        runtime.mcop_tool.ainvoke = original
+    assert out.startswith('MCOP_DEMO_INCOMPLETE:')
+    assert 'missing required high-confidence fact' in out
 
 
 def test_generic_demo_without_mcop_context_is_not_hijacked(runtime):

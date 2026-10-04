@@ -322,6 +322,57 @@ def test_verifier_rejects_old_runtime_hash(runtime):
         module.verify(ROOT,report)
 
 
+def test_mcop_child_planner_protocol_unwraps_tool_evidence_packet(runtime):
+    packet = {
+        'packet_type': 'tool_evidence',
+        'task_id': 'child-protocol',
+        'worker_role': 'tool_worker',
+        'status': 'completed',
+        'tool_families_used': [],
+        'tools_called': [],
+        'raw_artifacts': [],
+        'facts': [{'claim': 'portable child packet', 'confidence': 'high'}],
+        'inferences': [],
+        'gaps': [],
+        'errors': [],
+        'next_recommended_step': '',
+        'summary': 'portable packet complete',
+    }
+    runtime.model.replies = [
+        json.dumps({'action': 'final', 'final': json.dumps(packet)})
+    ]
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(
+        model=runtime.model,
+        tools=[tool for tool in runtime.tools if tool.name != 'agent_spawn_task'],
+        messages=[
+            System('Task id: child-protocol'),
+            Human('Return a controlled MCOP child evidence packet.'),
+        ],
+        config={'configurable': {'thread_id': 'child-parent', 'mcop_child': True}},
+        max_steps=2,
+    ))
+    parsed = json.loads(answer.content)
+    assert parsed['packet_type'] == 'tool_evidence'
+    assert parsed['task_id'] == 'child-protocol'
+    assert parsed['status'] == 'completed'
+    assert runtime.model.calls == 1
+
+
+def test_mcop_child_prompt_includes_nested_final_contract(runtime):
+    prompt = runtime.impl._build_planner_prompt(
+        'child task',
+        '',
+        'Task id: prompt-contract',
+        [],
+        [],
+        'parent-chat',
+        mcop_child=True,
+    )
+    assert 'MCOP child finalization contract:' in prompt
+    assert 'final field must be a STRING' in prompt
+    assert 'Do NOT emit ToolEvidencePacket as the top-level planner object' in prompt
+
+
 def test_mcop_child_context_bypasses_parent_demo_interceptor(runtime):
     runtime.model.replies = [
         json.dumps({'action': 'final', 'final': 'child planner final'})

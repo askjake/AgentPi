@@ -78,6 +78,14 @@ def test_child_source_uses_shared_live_planner_and_forbids_recursive_mcop():
     assert 'planner_config["configurable"]["mcop_child"] = True' in source
 
 
+def test_mcop_receipt_paths_are_portable():
+    child = (AGENT_MODE / "child_conversation.py").read_text(encoding="utf-8")
+    tools = (AGENT_MODE / "mcop_tools.py").read_text(encoding="utf-8")
+    assert "raw_path.relative_to(_workspace_path(parent_chat_id, create=True)).as_posix()" in child
+    assert "packet_file.relative_to(_workspace_path(parent_chat_id, create=True)).as_posix()" in child
+    assert "packet.relative_to(_workspace_path(chat_id, create=False)).as_posix()" in tools
+
+
 def test_agentpi_model_factory_call_shape_is_current():
     child = (AGENT_MODE / "child_conversation.py").read_text(encoding="utf-8")
     agent = (AGENT_MODE / "agent.py").read_text(encoding="utf-8")

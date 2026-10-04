@@ -124,6 +124,41 @@ def test_live_mcop_capability_answer_not_model_invention(live_graph):
     assert provider.calls == 0
 
 
+def test_live_mcop_pronoun_demo_uses_assistant_context(live_graph, monkeypatch):
+    from langchain_core.messages import AIMessage
+    rag, _, _, _, provider, HumanMessage, _ = live_graph
+    from app.agent_mode import mcop_tools
+
+    calls = []
+    async def fake_spawn(chat_id, task_prompt, task_id='', context_files='[]', max_iters=5):
+        calls.append((chat_id, task_id, max_iters))
+        return json.dumps({
+            'contract': 'agentpi-mcop-v1',
+            'task_id': task_id,
+            'status': 'completed',
+            'facts': [{'claim': 'assistant-context fixture child executed', 'confidence': 'high'}],
+            'gaps': [],
+            'errors': [],
+            'summary': 'contextual demo fixture complete',
+        })
+
+    monkeypatch.setattr(mcop_tools.agent_spawn_task, 'coroutine', fake_spawn)
+    state = asyncio.run(rag.call_model(
+        {
+            'messages': [
+                AIMessage(content='MCOP means Multi-Conversation Orchestration Protocol. It is implemented.'),
+                HumanMessage(content='please test and exhibit it in action'),
+            ],
+            'model_config': {},
+        },
+        config={'configurable': {'thread_id': 'mcop-context-demo'}}))
+    text = state['messages'][-1].content
+    assert text.startswith('MCOP demonstration result (actual agent_spawn_task output)')
+    assert 'assistant-context fixture child executed' in text
+    assert calls and calls[0][0] == 'mcop-context-demo'
+    assert provider.calls == 0
+
+
 def test_live_mcop_demo_dispatches_one_real_bound_spawn_tool(live_graph, monkeypatch):
     rag, _, _, _, provider, HumanMessage, _ = live_graph
     from app.agent_mode import mcop_tools

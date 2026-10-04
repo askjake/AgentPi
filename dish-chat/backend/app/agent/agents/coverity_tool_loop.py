@@ -71,7 +71,7 @@ def _mcop_question(text: str, messages: list) -> bool:
     # execution path rather than being answered by the read-only description.
     if re.search(r'\b(?:implement|integrate|build|add|enable|disable)\b', text, re.I):
         return False
-    if not is_mcop_child and _mcop_demo_request(text, messages):
+    if _mcop_demo_request(text, messages):
         return False
     return bool(re.search(r'\bmcop\b', text, re.I))
 
@@ -105,7 +105,7 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
     COUNTERS['entered'] += 1
     logger.info('LIVE_PLANNER_ENTRY contract=%s implementation=%s', CONTRACT, implementation.__name__)
 
-    if _mcop_demo_request(text, messages):
+    if not is_mcop_child and _mcop_demo_request(text, messages):
         COUNTERS['mcop_demo'] += 1
         if not chat_id:
             return AIMessage(content=(

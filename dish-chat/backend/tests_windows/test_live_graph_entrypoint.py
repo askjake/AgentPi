@@ -136,7 +136,12 @@ def test_live_mcop_pronoun_demo_uses_assistant_context(live_graph, monkeypatch):
             'contract': 'agentpi-mcop-v1',
             'task_id': task_id,
             'status': 'completed',
-            'facts': [{'claim': 'assistant-context fixture child executed', 'confidence': 'high'}],
+            'iterations_used': 1,
+            'packet_path': f"_mcop/task_{task_id}/tool_evidence_packet.json",
+            'facts': [{
+                'claim': f"MCOP_SMOKE_EXECUTED:{task_id}",
+                'confidence': 'high',
+            }],
             'gaps': [],
             'errors': [],
             'summary': 'contextual demo fixture complete',
@@ -153,8 +158,8 @@ def test_live_mcop_pronoun_demo_uses_assistant_context(live_graph, monkeypatch):
         },
         config={'configurable': {'thread_id': 'mcop-context-demo'}}))
     text = state['messages'][-1].content
-    assert text.startswith('MCOP demonstration result (actual agent_spawn_task output)')
-    assert 'assistant-context fixture child executed' in text
+    assert text.startswith('MCOP demonstration verified (actual agent_spawn_task output)')
+    assert 'MCOP_SMOKE_EXECUTED:' in text
     assert calls and calls[0][0] == 'mcop-context-demo'
     assert provider.calls == 0
 
@@ -176,7 +181,12 @@ def test_live_mcop_demo_dispatches_one_real_bound_spawn_tool(live_graph, monkeyp
             'contract': 'agentpi-mcop-v1',
             'task_id': task_id,
             'status': 'completed',
-            'facts': [{'claim': 'native fixture child executed', 'confidence': 'high'}],
+            'iterations_used': 1,
+            'packet_path': f"_mcop/task_{task_id}/tool_evidence_packet.json",
+            'facts': [{
+                'claim': f"MCOP_SMOKE_EXECUTED:{task_id}",
+                'confidence': 'high',
+            }],
             'gaps': [],
             'errors': [],
             'summary': 'native controlled child fixture complete',
@@ -187,8 +197,8 @@ def test_live_mcop_demo_dispatches_one_real_bound_spawn_tool(live_graph, monkeyp
         {'messages': [HumanMessage(content='test MCOP in action')], 'model_config': {}},
         config={'configurable': {'thread_id': 'mcop-live-demo'}}))
     text = state['messages'][-1].content
-    assert text.startswith('MCOP demonstration result (actual agent_spawn_task output)')
-    assert 'native fixture child executed' in text
+    assert text.startswith('MCOP demonstration verified (actual agent_spawn_task output)')
+    assert 'MCOP_SMOKE_EXECUTED:' in text
     assert len(calls) == 1
     assert calls[0]['chat_id'] == 'mcop-live-demo'
     assert calls[0]['task_id'].startswith('mcop-demo-')

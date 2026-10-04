@@ -304,5 +304,21 @@ def test_verifier_rejects_old_runtime_hash(runtime):
         module.verify(ROOT,report)
 
 
+def test_mcop_child_context_bypasses_parent_demo_interceptor(runtime):
+    runtime.model.replies = [
+        json.dumps({'action': 'final', 'final': 'child planner final'})
+    ]
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(
+        model=runtime.model,
+        tools=[tool for tool in runtime.tools if tool.name != 'agent_spawn_task'],
+        messages=[Human('Perform a controlled MCOP smoke test and return evidence.')],
+        config={'configurable': {'thread_id': 'child-parent', 'mcop_child': True}},
+        max_steps=2,
+    ))
+    assert answer.content == 'child planner final'
+    assert runtime.mcop_tool.calls == []
+    assert runtime.model.calls == 1
+
+
 def test_mcop_implementation_request_is_not_intercepted(runtime):
     assert not runtime.live._mcop_question('implement MCOP for this agent', [])

@@ -335,7 +335,7 @@ def agent_read_packet(
             "contract": IMPLEMENTATION_CONTRACT,
             "status": "ok",
             "task_id": task_id,
-            "packet_path": str(packet.relative_to(_workspace_path(chat_id, create=False))),
+            "packet_path": packet.relative_to(_workspace_path(chat_id, create=False)).as_posix(),
             "offset": offset,
             "returned_chars": len(chunk),
             "total_chars": len(text),

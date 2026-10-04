@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import hashlib
 import json
+from pathlib import Path
 from typing import Any
+
+LOADED_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 PACKET_TYPE = "tool_evidence"
 TERMINAL_STATUSES = frozenset({"completed", "partial", "failed", "blocked", "cancelled"})

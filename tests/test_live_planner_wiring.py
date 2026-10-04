@@ -320,5 +320,11 @@ def test_mcop_child_context_bypasses_parent_demo_interceptor(runtime):
     assert runtime.model.calls == 1
 
 
+def test_mcop_question_helper_has_no_runtime_scope_dependency(runtime):
+    assert runtime.live._mcop_question('describe MCOP', []) is True
+    assert runtime.live._mcop_question('test MCOP in action', []) is False
+    assert runtime.live._mcop_question('write and run Python', []) is False
+
+
 def test_mcop_implementation_request_is_not_intercepted(runtime):
     assert not runtime.live._mcop_question('implement MCOP for this agent', [])

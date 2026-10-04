@@ -169,6 +169,68 @@ def test_full_child_shared_planner_unwraps_and_persists_packet(monkeypatch, tmp_
     assert persisted["task_id"] == "planner-e2e"
 
 
+def test_runtime_smoke_fact_is_machine_authored_and_preserves_model_fact(monkeypatch, tmp_path):
+    from app.agent_mode import child_conversation as child
+
+    monkeypatch.setattr(child, "BASE_AGENT_WORKDIR", str(tmp_path))
+    low_fact = {
+        "claim": "MCOP_SMOKE_EXECUTED:mcop-demo-runtime",
+        "confidence": "low",
+        "source": "smoke_test",
+    }
+    packet = {
+        "packet_type": "tool_evidence",
+        "task_id": "mcop-demo-runtime",
+        "worker_role": "tool_worker",
+        "status": "completed",
+        "tool_families_used": [],
+        "tools_called": [],
+        "raw_artifacts": [],
+        "facts": [low_fact],
+        "inferences": [],
+        "gaps": [],
+        "errors": [],
+        "next_recommended_step": "",
+        "summary": "model-authored packet",
+    }
+
+    class FakeGraph:
+        async def ainvoke(self, state, config=None):
+            return {
+                **state,
+                "messages": [*state["messages"], AIMessage(content=json.dumps(packet))],
+                "iterations": 1,
+            }
+
+    monkeypatch.setattr(child, "_build_child_graph", lambda: FakeGraph())
+    result = asyncio.run(child.run_child_conversation(
+        parent_chat_id="runtime-proof-parent",
+        task_id="mcop-demo-runtime",
+        prompt="controlled smoke fixture",
+        max_iters=2,
+        verification_profile="mcop_smoke_v1",
+    ))
+
+    assert result.status == "completed"
+    assert low_fact in result.facts
+    runtime_facts = [
+        fact for fact in result.facts
+        if fact.get("source") == "agentpi_mcop_runtime"
+    ]
+    assert runtime_facts == [{
+        "claim": "MCOP_SMOKE_EXECUTED:mcop-demo-runtime",
+        "confidence": "high",
+        "source": "agentpi_mcop_runtime",
+        "reference": "_mcop/task_mcop-demo-runtime/tool_evidence_packet.json",
+    }]
+    persisted = json.loads(
+        (tmp_path / "runtime-proof-parent" / "_mcop" / "task_mcop-demo-runtime" / "tool_evidence_packet.json")
+        .read_text(encoding="utf-8")
+    )
+    assert low_fact in persisted["facts"]
+    assert runtime_facts[0] in persisted["facts"]
+
+
 def test_coverity_child_calls_shared_live_planner_with_parent_workspace(monkeypatch):
     from app.agent_mode import child_conversation as child
     from app.agent.agents import coverity_tool_loop as live

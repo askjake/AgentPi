@@ -21,8 +21,33 @@ def verify(root: Path, report: dict) -> None:
         actual = hashlib.sha256(path.read_bytes()).hexdigest()
         if report.get(key) != actual:
             raise ValueError(f'Running process/source mismatch: {filename}; restart the managed backend')
-    if report.get('mcop', {}).get('implemented_in_this_revision') is not False:
-        raise ValueError('Unexpected MCOP implementation claim')
+    mcop = report.get('mcop', {})
+    if mcop.get('implemented_in_this_revision') is not True:
+        raise ValueError('MCOP implementation is not active in the running revision')
+    if mcop.get('contract') != 'agentpi-mcop-v1':
+        raise ValueError('Missing or obsolete MCOP contract')
+    if mcop.get('registry_binding_matches') is not True:
+        raise ValueError('MCOP registry binding mismatch')
+    expected_tools = {
+        'agent_spawn_task',
+        'agent_spawn_parallel',
+        'agent_check_tasks',
+        'agent_read_task_result',
+        'agent_read_packet',
+    }
+    if set(mcop.get('bound_tool_names') or []) != expected_tools:
+        raise ValueError('MCOP tool binding inventory mismatch')
+    if mcop.get('max_depth') != 1:
+        raise ValueError('MCOP recursive depth invariant changed')
+    for relpath, key in (
+        ('dish-chat/backend/app/agent_mode/child_conversation.py', 'loaded_child_sha256'),
+        ('dish-chat/backend/app/agent_mode/mcop_tools.py', 'loaded_tools_sha256'),
+        ('dish-chat/backend/app/agent_mode/orchestration_packets.py', 'loaded_packets_sha256'),
+    ):
+        path = root / relpath
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if mcop.get(key) != actual:
+            raise ValueError(f'Running MCOP/source mismatch: {relpath}; restart the managed backend')
 
 
 def main() -> int:

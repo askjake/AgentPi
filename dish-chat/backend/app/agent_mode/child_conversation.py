@@ -203,7 +203,7 @@ Use only the tools bound to this child. You cannot spawn or inspect other MCOP
 children. Do not claim a tool action succeeded unless its returned evidence says
 so. Keep work bounded to this task.
 
-Your FINAL response must be one JSON object with this exact shape:
+Your final CHILD EVIDENCE content must be one JSON object with this exact shape:
 {{
   "packet_type": "tool_evidence",
   "task_id": "{task_id}",
@@ -219,6 +219,12 @@ Your FINAL response must be one JSON object with this exact shape:
   "next_recommended_step": "",
   "summary": ""
 }}
+Because this child runs through the shared Coverity tool planner, the planner's
+TOP-LEVEL response still uses its normal action protocol. When finalizing, place
+the serialized ToolEvidencePacket JSON above as the STRING value of the
+planner's action=final "final" field. Do not emit the ToolEvidencePacket as the
+top-level planner response.
+
 Use workspace-relative paths in raw_artifacts. If evidence is incomplete, use
 status=partial and record the gap instead of inventing completion."""
 
@@ -389,7 +395,7 @@ async def run_child_conversation(
         if packet is None:
             raw_path = task_dir / "unparsed_final_response.txt"
             raw_path.write_text(raw_final[: max(MCOP_RESULT_MAX_CHARS * 4, 48_000)], encoding="utf-8")
-            raw_rel = str(raw_path.relative_to(_workspace_path(parent_chat_id, create=True)))
+            raw_rel = raw_path.relative_to(_workspace_path(parent_chat_id, create=True)).as_posix()
             packet = normalize_worker_packet_from_summary(
                 task_id=task_id,
                 summary=raw_final[:MCOP_RESULT_MAX_CHARS],
@@ -419,7 +425,7 @@ async def run_child_conversation(
             gaps=list(packet.gaps),
             errors=list(packet.errors),
             next_recommended_step=packet.next_recommended_step,
-            packet_path=str(packet_file.relative_to(_workspace_path(parent_chat_id, create=True))),
+            packet_path=packet_file.relative_to(_workspace_path(parent_chat_id, create=True)).as_posix(),
             started_at=started,
             finished_at=datetime.now(timezone.utc).isoformat(),
         )

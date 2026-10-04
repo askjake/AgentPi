@@ -225,7 +225,10 @@ status=partial and record the gap instead of inventing completion."""
 
 async def _child_agent_node(state: ChildState, config: dict[str, Any] | None = None) -> dict[str, Any]:
     tools = _get_child_tools()
-    model = get_model(model_arn=(getattr(settings, "AGENT_MODE_MODEL", None) or None))
+    # AgentPi's model factory resolves the configured provider/model from
+    # Settings. It accepts only the optional efficient= flag; older JakeBot
+    # model_arn calling conventions are not valid here.
+    model = get_model()
     set_model_config(model, {"temperature": 0.2, "reasoning": True})
     system = SystemMessage(content=_child_system_prompt(state["chat_id"], state["task_id"]))
     messages = [system, *state["messages"]]

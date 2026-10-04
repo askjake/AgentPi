@@ -106,6 +106,69 @@ def test_unparseable_child_response_is_partial(monkeypatch, tmp_path):
     assert (tmp_path / "chat-partial" / "_mcop" / "task_partial-test" / "unparsed_final_response.txt").is_file()
 
 
+def test_full_child_shared_planner_unwraps_and_persists_packet(monkeypatch, tmp_path):
+    from app.agent_mode import child_conversation as child
+
+    monkeypatch.setattr(child, "BASE_AGENT_WORKDIR", str(tmp_path))
+    monkeypatch.setattr(child, "set_model_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(child.settings, "PLLM_PROVIDER", "coverity-assist")
+
+    packet = {
+        "packet_type": "tool_evidence",
+        "task_id": "planner-e2e",
+        "worker_role": "tool_worker",
+        "status": "completed",
+        "tool_families_used": [],
+        "tools_called": [],
+        "raw_artifacts": [],
+        "facts": [{"claim": "shared planner child completed", "confidence": "high"}],
+        "inferences": [],
+        "gaps": [],
+        "errors": [],
+        "next_recommended_step": "",
+        "summary": "shared planner packet complete",
+    }
+    planner_wrapper = json.dumps({
+        "action": "final",
+        "final": json.dumps(packet),
+    })
+
+    class FakeModel:
+        _llm_type = "fixture"
+        def bind_tools(self, tools):
+            return self
+        async def ainvoke(self, messages, config=None):
+            prompt = str(getattr(messages[-1], "content", ""))
+            assert "MCOP child finalization contract:" in prompt
+            assert "final field must be a STRING" in prompt
+            return AIMessage(content=planner_wrapper)
+
+    def strict_get_model(*args, **kwargs):
+        assert args == ()
+        assert kwargs == {}
+        return FakeModel()
+
+    monkeypatch.setattr(child, "get_model", strict_get_model)
+
+    result = asyncio.run(child.run_child_conversation(
+        parent_chat_id="planner-parent",
+        task_id="planner-e2e",
+        prompt="Return the controlled smoke-test evidence packet without tools.",
+        max_iters=2,
+    ))
+
+    assert result.status == "completed"
+    assert result.iterations_used == 1
+    assert result.summary == "shared planner packet complete"
+    assert result.facts[0]["claim"] == "shared planner child completed"
+    assert result.packet_path == "_mcop/task_planner-e2e/tool_evidence_packet.json"
+    packet_path = tmp_path / "planner-parent" / "_mcop" / "task_planner-e2e" / "tool_evidence_packet.json"
+    assert packet_path.is_file()
+    persisted = json.loads(packet_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "completed"
+    assert persisted["task_id"] == "planner-e2e"
+
+
 def test_coverity_child_calls_shared_live_planner_with_parent_workspace(monkeypatch):
     from app.agent_mode import child_conversation as child
     from app.agent.agents import coverity_tool_loop as live

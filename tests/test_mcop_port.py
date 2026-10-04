@@ -78,6 +78,15 @@ def test_child_source_uses_shared_live_planner_and_forbids_recursive_mcop():
     assert 'planner_config["configurable"]["mcop_child"] = True' in source
 
 
+def test_agentpi_model_factory_call_shape_is_current():
+    child = (AGENT_MODE / "child_conversation.py").read_text(encoding="utf-8")
+    agent = (AGENT_MODE / "agent.py").read_text(encoding="utf-8")
+    assert "get_model(model_arn=" not in child
+    assert "get_model(model_arn=" not in agent
+    assert "model = get_model()" in child
+    assert "model = get_model()" in agent
+
+
 def test_live_registry_and_entrypoint_declare_mcop_contract():
     registry = (BACKEND / "app" / "agent" / "agents" / "tools" / "registry.py").read_text(encoding="utf-8")
     live = (BACKEND / "app" / "agent" / "agents" / "coverity_tool_loop.py").read_text(encoding="utf-8")

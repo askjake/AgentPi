@@ -21,8 +21,15 @@ echo === PYTHON SOURCE SYNTAX ===
 .venv-windows\Scripts\python.exe -m py_compile ^
   dish-chat\backend\app\tools\web_search.py ^
   dish-chat\backend\app\agent_mode\genealogy.py ^
+  dish-chat\backend\app\agent_mode\orchestration_packets.py ^
+  dish-chat\backend\app\agent_mode\child_conversation.py ^
+  dish-chat\backend\app\agent_mode\mcop_tools.py ^
   dish-chat\backend\app\agent\agents\search_renderer.py ^
   dish-chat\backend\app\agent\agents\coverity_tool_loop_token_limit.py
+if errorlevel 1 goto failed
+
+echo === FOCUSED MCOP PHASE-A TESTS ===
+.venv-windows\Scripts\python.exe -m pytest -q tests\test_mcop_port.py
 if errorlevel 1 goto failed
 
 echo === FOCUSED EXECUTION-BOUNDARY TESTS ===

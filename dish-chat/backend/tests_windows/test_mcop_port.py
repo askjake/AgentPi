@@ -138,7 +138,12 @@ def test_coverity_child_calls_shared_live_planner_with_parent_workspace(monkeypa
             "summary": "ok",
         }))
 
-    monkeypatch.setattr(child, "get_model", lambda **kwargs: FakeModel())
+    def strict_get_model(*args, **kwargs):
+        assert args == ()
+        assert kwargs == {}
+        return FakeModel()
+
+    monkeypatch.setattr(child, "get_model", strict_get_model)
     monkeypatch.setattr(child, "set_model_config", lambda *args, **kwargs: None)
     monkeypatch.setattr(live, "run_coverity_tool_loop", fake_loop)
     monkeypatch.setattr(child.settings, "PLLM_PROVIDER", "coverity-assist")

@@ -88,9 +88,11 @@ def test_deterministic_demo_auto_selects_runtime_verification_profile():
 def test_mcop_receipt_paths_are_portable():
     child = (AGENT_MODE / "child_conversation.py").read_text(encoding="utf-8")
     tools = (AGENT_MODE / "mcop_tools.py").read_text(encoding="utf-8")
-    assert "raw_path.relative_to(_workspace_path(parent_chat_id, create=True)).as_posix()" in child
-    assert "packet_file.relative_to(_workspace_path(parent_chat_id, create=True)).as_posix()" in child
-    assert "packet.relative_to(_workspace_path(chat_id, create=False)).as_posix()" in tools
+    child_compact = " ".join(child.split())
+    tools_compact = " ".join(tools.split())
+    assert "raw_path.relative_to(_workspace_path(parent_chat_id, create=True)).as_posix()" in child_compact
+    assert "packet_rel = packet_file.relative_to( _workspace_path(parent_chat_id, create=True) ).as_posix()" in child_compact
+    assert "packet.relative_to(_workspace_path(chat_id, create=False)).as_posix()" in tools_compact
 
 
 def test_agentpi_model_factory_call_shape_is_current():

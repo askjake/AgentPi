@@ -48,6 +48,7 @@ MCOP_PARALLEL_LIMIT = int(getattr(settings, "MCOP_PARALLEL_LIMIT", 3))
 MCOP_CONTEXT_MAX_CHARS = int(getattr(settings, "MCOP_CONTEXT_MAX_CHARS", 100_000))
 MCOP_RESULT_MAX_CHARS = int(getattr(settings, "MCOP_RESULT_MAX_CHARS", 12_000))
 MCOP_DIR = "_mcop"
+MCOP_VERIFICATION_PROFILES = frozenset({"", "mcop_smoke_v1"})
 
 _MCOP_TOOL_NAMES = frozenset({
     "agent_spawn_task",
@@ -352,9 +353,13 @@ async def run_child_conversation(
     max_iters: Optional[int] = None,
     *,
     record_state: bool = True,
+    verification_profile: str = "",
 ) -> ChildResult:
     _validate_identity(parent_chat_id, "chat_id")
     _validate_identity(task_id, "task_id")
+    verification_profile = str(verification_profile or "")
+    if verification_profile not in MCOP_VERIFICATION_PROFILES:
+        raise ValueError(f"unsupported verification_profile: {verification_profile}")
     effective_max_iters = max(1, min(int(max_iters or MCOP_CHILD_MAX_ITERS), MCOP_CHILD_MAX_ITERS))
     task_dir = _get_task_dir(parent_chat_id, task_id)
     result_file = task_dir / "result.json"
@@ -411,6 +416,31 @@ async def run_child_conversation(
 
         packet.raw_artifacts = artifacts
         packet_file = task_dir / "tool_evidence_packet.json"
+        packet_rel = packet_file.relative_to(
+            _workspace_path(parent_chat_id, create=True)
+        ).as_posix()
+
+        if (
+            verification_profile == "mcop_smoke_v1"
+            and packet.status == "completed"
+            and iterations_used >= 1
+            and not packet.gaps
+            and not packet.errors
+        ):
+            runtime_claim = f"MCOP_SMOKE_EXECUTED:{task_id}"
+            if not any(
+                isinstance(fact, dict)
+                and fact.get("claim") == runtime_claim
+                and fact.get("source") == "agentpi_mcop_runtime"
+                for fact in packet.facts
+            ):
+                packet.facts.append({
+                    "claim": runtime_claim,
+                    "confidence": "high",
+                    "source": "agentpi_mcop_runtime",
+                    "reference": packet_rel,
+                })
+
         _atomic_write_json(packet_file, packet.to_dict())
 
         result = ChildResult(
@@ -425,7 +455,7 @@ async def run_child_conversation(
             gaps=list(packet.gaps),
             errors=list(packet.errors),
             next_recommended_step=packet.next_recommended_step,
-            packet_path=packet_file.relative_to(_workspace_path(parent_chat_id, create=True)).as_posix(),
+            packet_path=packet_rel,
             started_at=started,
             finished_at=datetime.now(timezone.utc).isoformat(),
         )

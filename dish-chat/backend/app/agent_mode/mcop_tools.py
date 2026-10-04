@@ -136,6 +136,7 @@ async def agent_spawn_task(
     task_id: str = "",
     context_files: str = "[]",
     max_iters: int = 5,
+    verification_profile: str = "",
 ) -> str:
     """Run one bounded MCOP child conversation in a fresh context."""
     try:
@@ -171,6 +172,7 @@ async def agent_spawn_task(
             prompt=str(task_prompt),
             context_files=files,
             max_iters=max(1, min(int(max_iters), MCOP_CHILD_MAX_ITERS)),
+            verification_profile=str(verification_profile or ""),
         )
         return _json(_result_payload(result))
     except Exception as exc:

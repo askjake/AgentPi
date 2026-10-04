@@ -71,7 +71,7 @@ def _mcop_question(text: str, messages: list) -> bool:
     # execution path rather than being answered by the read-only description.
     if re.search(r'\b(?:implement|integrate|build|add|enable|disable)\b', text, re.I):
         return False
-    if _mcop_demo_request(text, messages):
+    if not is_mcop_child and _mcop_demo_request(text, messages):
         return False
     return bool(re.search(r'\bmcop\b', text, re.I))
 
@@ -98,6 +98,10 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
     messages = messages or kwargs.get('state_messages') or []
     text = implementation._extract_last_user_text(messages)
     chat_id = implementation._extract_chat_id(config)
+    try:
+        is_mcop_child = bool((config or {}).get('configurable', {}).get('mcop_child'))
+    except Exception:
+        is_mcop_child = False
     COUNTERS['entered'] += 1
     logger.info('LIVE_PLANNER_ENTRY contract=%s implementation=%s', CONTRACT, implementation.__name__)
 
@@ -146,7 +150,7 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
             + implementation._content_to_text(result)
         ))
 
-    if _mcop_question(text, messages):
+    if not is_mcop_child and _mcop_question(text, messages):
         COUNTERS['mcop_description'] += 1
         names = sorted({implementation._tool_name(t) for t in tools})
         bound_mcop = [name for name in MCOP_TOOL_NAMES if name in names]

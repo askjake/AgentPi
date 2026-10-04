@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import importlib
+import json
 from pathlib import Path
 import socket
 import sys
@@ -24,7 +25,7 @@ def live_graph(monkeypatch, tmp_path):
     from langchain_core.messages import HumanMessage
     from langgraph.checkpoint.memory import MemorySaver
     from app.agent.agents import agentic_rag as rag, coverity_tool_loop as live
-    from app.agent_mode import agent as mode, tools as native
+    from app.agent_mode import agent as mode, child_conversation as child, tools as native
 
     class NoProvider:
         _llm_type = 'coverity-assist'
@@ -40,6 +41,7 @@ def live_graph(monkeypatch, tmp_path):
     monkeypatch.setattr(rag, 'set_model_config', lambda *a: None)
     monkeypatch.setattr(mode, 'set_model_config', lambda *a: None)
     monkeypatch.setattr(native, 'BASE_AGENT_WORKDIR', str(tmp_path))
+    monkeypatch.setattr(child, 'BASE_AGENT_WORKDIR', str(tmp_path))
     monkeypatch.setattr(mode, 'interceptor', SimpleNamespace(
         thought=lambda *a: None, context_update=lambda *a: None, decision=lambda *a, **k: None))
     monkeypatch.setattr(rag.settings, 'PLLM_PROVIDER', 'coverity-assist')
@@ -48,6 +50,8 @@ def live_graph(monkeypatch, tmp_path):
     # Real registry bindings must include the real local tool, not a surrogate.
     bound = rag.get_tools_set('agent_mode')
     assert any(t is native.agent_run_python for t in bound)
+    bound_names = {getattr(t, 'name', '') for t in bound}
+    assert set(live.MCOP_TOOL_NAMES).issubset(bound_names)
     # If stale routing accidentally selects an actual search execution tool,
     # fail before any request. Do NOT replace public_web_search_status: the
     # diagnostic-routing test below intentionally invokes that local diagnostic
@@ -107,8 +111,48 @@ def test_live_mcop_capability_answer_not_model_invention(live_graph):
     state = asyncio.run(rag.call_model(
         {'messages': [HumanMessage(content='describe your MCOP backend functionality.')], 'model_config': {}},
         config={'configurable': {'thread_id': 'mcop-probe'}}))
-    assert 'Multi-Conversation Orchestration Protocol' in state['messages'][-1].content
-    assert 'NOT implemented' in state['messages'][-1].content
+    text = state['messages'][-1].content
+    assert 'Multi-Conversation Orchestration Protocol' in text
+    assert 'implemented in this AgentPi revision' in text
+    assert 'All expected MCOP parent tools are bound' in text
+    assert 'This description request did not spawn a child' in text
+    assert provider.calls == 0
+
+
+def test_live_mcop_demo_dispatches_one_real_bound_spawn_tool(live_graph, monkeypatch):
+    rag, _, _, _, provider, HumanMessage, _ = live_graph
+    from app.agent_mode import mcop_tools
+
+    calls = []
+    async def fake_spawn(chat_id, task_prompt, task_id='', context_files='[]', max_iters=5):
+        calls.append({
+            'chat_id': chat_id,
+            'task_prompt': task_prompt,
+            'task_id': task_id,
+            'context_files': context_files,
+            'max_iters': max_iters,
+        })
+        return json.dumps({
+            'contract': 'agentpi-mcop-v1',
+            'task_id': task_id,
+            'status': 'completed',
+            'facts': [{'claim': 'native fixture child executed', 'confidence': 'high'}],
+            'gaps': [],
+            'errors': [],
+            'summary': 'native controlled child fixture complete',
+        })
+
+    monkeypatch.setattr(mcop_tools.agent_spawn_task, 'coroutine', fake_spawn)
+    state = asyncio.run(rag.call_model(
+        {'messages': [HumanMessage(content='test MCOP in action')], 'model_config': {}},
+        config={'configurable': {'thread_id': 'mcop-live-demo'}}))
+    text = state['messages'][-1].content
+    assert text.startswith('MCOP demonstration result (actual agent_spawn_task output)')
+    assert 'native fixture child executed' in text
+    assert len(calls) == 1
+    assert calls[0]['chat_id'] == 'mcop-live-demo'
+    assert calls[0]['task_id'].startswith('mcop-demo-')
+    assert calls[0]['max_iters'] == 2
     assert provider.calls == 0
 
 
@@ -133,6 +177,10 @@ def test_loaded_identity_matches_both_graph_callers(live_graph):
     assert report['chat_binding_matches']
     assert report['agent_mode_binding_matches']
     assert report['loaded_entrypoint_sha256'] == hashlib.sha256(Path(live.__file__).read_bytes()).hexdigest()
+    assert report['mcop']['implemented_in_this_revision'] is True
+    assert report['mcop']['registry_binding_matches'] is True
+    assert set(report['mcop']['bound_tool_names']) == set(live.MCOP_TOOL_NAMES)
+    assert report['mcop']['max_depth'] == 1
 
 
 def test_cached_human_message_still_matches_exact_probe(live_graph):

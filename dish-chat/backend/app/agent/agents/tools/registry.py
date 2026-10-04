@@ -14,6 +14,13 @@ from app.tools.agentpi_bridge import (
     agentpi_clear_inventory,
 )
 from app.agent_mode.genealogy import agent_genealogy_identity_check
+from app.agent_mode.mcop_tools import (
+    agent_spawn_task,
+    agent_spawn_parallel,
+    agent_check_tasks,
+    agent_read_task_result,
+    agent_read_packet,
+)
 from app.agent_mode.tools import (
     agent_git_clone, agent_create_venv, agent_run_python,
     agent_list_artifacts, agent_run_shell,
@@ -51,6 +58,9 @@ _TF.update({
         agent_genealogy_identity_check,
         agent_git_clone, agent_create_venv, agent_run_python,
         agent_list_artifacts, agent_run_shell,
+        # MCOP — depth-one bounded child orchestration
+        agent_spawn_task, agent_spawn_parallel,
+        agent_check_tasks, agent_read_task_result, agent_read_packet,
         # Network
         agent_network_scan, agent_check_device, agent_save_device_info, agent_list_devices,
         # System

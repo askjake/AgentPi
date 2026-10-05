@@ -379,3 +379,43 @@ def test_windows_search_allowlist_remains_restricted(live_graph):
     _, _, _, native, *_ = live_graph
     assert not native._validate_command('dir /s /b source')[0]
     assert not native._validate_command('powershell -Command Get-ChildItem -Recurse')[0]
+
+
+def test_target_first_native_executor_finishes_normally(live_graph):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from langchain_core.messages import AIMessage
+    _, _, live, native, _, HumanMessage, base = live_graph
+    hits = []
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            hits.append(self.path)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/javascript')
+            self.end_headers()
+            self.wfile.write(b'const endpoint="wss://andromeda.example/ws"; /* /turns persists text; framing unknown */')
+        def log_message(self, *args): pass
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    url = f'http://127.0.0.1:{server.server_port}/bundle.js'
+    prompts = []
+    class Planner:
+        replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+            'chat_id': 'native-target', 'filename': 'sweep_local.py', 'use_venv': False,
+            'code': 'raise AssertionError("Unrelated local sweep must not run")'}}),
+            '```json\n{"action":"final","final":"Target metadata references Andromeda; audio framing remains unknown. /turns persists text."}\n```']
+        async def ainvoke(self, messages, config=None):
+            prompts.append(messages[0].content)
+            return AIMessage(content=self.replies.pop(0))
+    try:
+        answer = asyncio.run(live.run_coverity_tool_loop(model=Planner(), tools=[native.agent_run_python],
+            messages=[HumanMessage(content=f'Investigate how {url} sends audio to the Andromeda WebSocket')],
+            config={'configurable': {'thread_id': 'native-target'}}))
+    finally:
+        server.shutdown(); server.server_close(); thread.join(timeout=5)
+    assert hits == ['/bundle.js']
+    assert 'TARGET_ORIGIN_RESULT=' in prompts[-1]
+    assert 'framing unknown' in prompts[-1]
+    assert 'audio framing remains unknown' in answer.content
+    assert 'PLANNER_FINALIZATION_PARTIAL' not in answer.content
+    assert not (base / 'native-target' / 'sweep_local.py').exists()

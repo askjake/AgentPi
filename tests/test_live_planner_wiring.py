@@ -872,3 +872,262 @@ def test_turn_windows_filesystem_request_reaches_planner(runtime, monkeypatch):
         tools=[types.SimpleNamespace(name='agent_run_shell', ainvoke=shell)],
         messages=[Human('list files recursively in the local source directory')]))
     assert calls == []
+
+
+@pytest.mark.parametrize('wrapped', [
+    '```json\n{"action":"final","final":"Target framing is unresolved."}\n```',
+    'Result:\n{"action":"final","final":"Target framing is unresolved."}',
+])
+def test_research_final_wrappers_already_parse(runtime, wrapped):
+    assert runtime.impl._pick_action_payload(wrapped)['action'] == 'final'
+
+
+@pytest.mark.parametrize('bad', [
+    '{"action":"final","final":"truncated',
+    '{"action":"tool","tool":"agent_run_python","input":',
+    '{"action":"final","final":"one"}{"action":"final","final":"two"}',
+])
+def test_research_incomplete_or_ambiguous_actions_stay_rejected(runtime, bad):
+    assert runtime.impl._pick_action_payload(bad) is None
+
+
+def test_research_first_local_scan_is_replaced_with_target_fetch(runtime):
+    calls = []
+    async def execute(payload):
+        calls.append(payload)
+        return 'TARGET_ORIGIN_RESULT=' + json.dumps({'source_url': 'https://voice-target.example/',
+            'status': 'ok', 'body': 'conversation metadata references wss://andromeda.example/ws; /turns persists text'})
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+        'filename': 'find_voice.py', 'code': "from pathlib import Path\nprint(list(Path('AgentPi/dish-chat').rglob('*.js')))"}}),
+        json.dumps({'action': 'final', 'final': 'Metadata references Andromeda; audio framing remains unresolved. POST /turns is persistence.'})]
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=execute)],
+        messages=[Human('Investigate how https://voice-target.example/ sends audio to wss://andromeda.example/ws')],
+        config={'configurable': {'thread_id': 'test-chat'}}))
+    assert len(calls) == 1
+    assert 'urlopen' in calls[0]['code'] or '.open(' in calls[0]['code']
+    assert 'https://voice-target.example/' in calls[0]['code']
+    assert 'rglob' not in calls[0]['code']
+    assert 'framing remains unresolved' in answer.content
+    assert 'PLANNER_FINALIZATION_PARTIAL' not in answer.content
+
+
+def test_research_retry_after_tools_requests_final_only(runtime):
+    prompts = []
+    replies = [json.dumps({'action': 'tool', 'tool': 'inspect_target', 'input': {}}),
+               'The observed transport framing remains unresolved.',
+               json.dumps({'action': 'final', 'final': 'Transport framing remains unresolved.'})]
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI(replies.pop(0))
+    async def inspect(payload): return 'target protocol evidence'
+    runtime.model.ainvoke = model
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='inspect_target', ainvoke=inspect)],
+        messages=[Human('Investigate target audio framing')]))
+    assert 'Return exactly one valid final action object' in prompts[-1]
+    assert 'Do not repeat completed discovery' in prompts[-1]
+    assert answer.content == 'Transport framing remains unresolved.'
+
+
+def test_research_protocol_diagnostics_are_metadata_only(runtime, caplog):
+    runtime.model.replies = ['{"action":"final","final":"password=TEST_SECRET', 'bare Bearer TEST_TOKEN']
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        messages=[Human('Explain the observed protocol')], max_steps=2))
+    assert 'shape=' in caplog.text and 'parse_error=' in caplog.text
+    assert 'TEST_SECRET' not in caplog.text and 'TEST_TOKEN' not in caplog.text
+
+
+def test_research_known_bundle_bypasses_ddg(runtime):
+    calls = []
+    async def execute(payload):
+        calls.append(payload)
+        return 'TARGET_ORIGIN_RESULT=' + json.dumps({'source_url': 'https://voice-target.example/assets/app.js', 'status': 'ok', 'body': 'ws.send(audio)'})
+    async def search(payload): raise AssertionError('known URL must not require DDG')
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'public_web_search', 'input': 'voice target latest bundle'}),
+                            json.dumps({'action': 'final', 'final': 'The target bundle contains ws.send; encoding remains unresolved.'})]
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=execute), types.SimpleNamespace(name='public_web_search', ainvoke=search)],
+        messages=[Human('Investigate the latest https://voice-target.example/assets/app.js')],
+        config={'configurable': {'thread_id': 'test-chat'}}))
+    assert len(calls) == 1 and 'https://voice-target.example/assets/app.js' in calls[0]['code']
+    assert 'PLANNER_FINALIZATION_PARTIAL' not in answer.content
+
+
+def test_research_blocked_target_limits_local_fallback(runtime):
+    calls, prompts = [], []
+    replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {'code': "print(list(Path('AgentPi').rglob('*')))"}})] * 4
+    replies += [json.dumps({'action': 'final', 'final': 'Target access failed with HTTP 403. Local audio/webm code is reference only; target framing remains unverified.'})]
+    async def execute(payload):
+        calls.append(payload)
+        if len(calls) == 1:
+            return 'TARGET_ORIGIN_RESULT=' + json.dumps({'source_url': 'https://voice-target.example', 'status': 'blocked', 'http_status': 403})
+        return 'Local AgentPi dashboard.js uses MediaRecorder/audio-webm'
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI(replies.pop(0))
+    runtime.model.ainvoke = model
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=execute)],
+        messages=[Human('Investigate https://voice-target.example audio framing')],
+        config={'configurable': {'thread_id': 'test-chat'}}, max_steps=6))
+    assert len(calls) == 3  # one target read, two bounded local references
+    assert 'REFERENCE LIMIT' in prompts[-1]
+    assert 'Target access failed' in answer.content and 'reference only' in answer.content
+    assert not answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
+
+
+def test_research_accessible_target_rejects_unexplained_local_pivot(runtime):
+    calls, prompts = [], []
+    replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {'code': "print(list(Path('AgentPi').rglob('*')))"}})] * 2
+    replies += [json.dumps({'action': 'final', 'final': 'Target HTML is available; bundle framing remains unresolved.'})]
+    async def execute(payload):
+        calls.append(payload)
+        return 'TARGET_ORIGIN_RESULT=' + json.dumps({'source_url': 'https://voice-target.example', 'status': 'ok', 'body': '<script src="/app.js"></script>'})
+    async def model(messages, config=None):
+        prompts.append(messages[0].content); return AI(replies.pop(0))
+    runtime.model.ainvoke = model
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=execute)],
+        messages=[Human('Investigate https://voice-target.example')], config={'configurable': {'thread_id': 'test-chat'}}))
+    assert len(calls) == 1
+    assert 'local reference directive not dispatched' in prompts[-1]
+
+
+def test_research_captured_source_requires_receipt(runtime):
+    target = runtime.impl.ResearchTarget('https://voice-target.example', 'url', 'https://voice-target.example')
+    assert runtime.impl._captured_target_path(target, [Human('voice_demo.js')]) is None
+    receipt = Human(json.dumps({'source_url': 'https://voice-target.example/assets/app.js', 'path': 'captured.js'}))
+    assert runtime.impl._captured_target_path(target, [receipt]) == 'captured.js'
+    assert runtime.impl._captured_target_path(target, [AI(receipt.content)]) is None
+    assert runtime.impl._captured_target_path(target, [Human(json.dumps({'source_url': 'https://other.example/app.js', 'path': 'captured.js'}))]) is None
+    payload = runtime.impl._target_read_payload(target, 'test-chat', 'captured.js')
+    assert "CAPTURE = 'captured.js'" in payload['code']
+
+
+def test_research_target_is_not_replaced_by_continuation_headers(runtime):
+    messages = [Human('Investigate https://voice-target.example audio framing'), AI('Next inspect the target bundle'),
+                Human('proceed\nRequest URL https://example.invalid/api/conversations\nRemote address 44.255.252.90:443')]
+    assert runtime.impl._research_target(messages).raw_target == 'https://voice-target.example'
+
+
+def test_research_three_tool_evidence_reaches_normal_final(runtime):
+    calls = []
+    async def inspect(payload):
+        calls.append(payload); return ['target HTML', 'target JS', 'protocol evidence'][len(calls)-1]
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'inspect_target', 'input': {'part': n}}) for n in range(3)]
+    runtime.model.replies += ['```json\n{"action":"final","final":"Metadata references Andromeda; binary framing remains unresolved. POST /turns persists text."}\n```']
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='inspect_target', ainvoke=inspect)],
+        messages=[Human('Investigate how https://voice-target.example sends audio to wss://andromeda.example/ws')], max_steps=4))
+    assert len(calls) == 3
+    assert 'binary framing remains unresolved' in answer.content
+    assert runtime.live.COUNTERS['artifact_readback'] == 0
+    assert 'PLANNER_FINALIZATION_PARTIAL' not in answer.content
+
+
+def test_research_finalization_repair_cannot_repeat_tool(runtime):
+    calls = []
+    async def inspect(payload): calls.append(payload); return 'target evidence'
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'inspect_target', 'input': {}}),
+                            'bare final answer', json.dumps({'action': 'tool', 'tool': 'inspect_target', 'input': {}})]
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='inspect_target', ainvoke=inspect)],
+        messages=[Human('Investigate the target')], max_steps=5))
+    assert len(calls) == 1
+    assert answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
+
+
+def test_research_malformed_tool_stays_nonexecutable(runtime):
+    calls = []
+    async def execute(payload): calls.append(payload)
+    runtime.model.replies = ['{"action":"tool","tool":"agent_run_python","input":'] * 2
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=execute)],
+        messages=[Human('Investigate https://voice-target.example')], config={'configurable': {'thread_id': 'test-chat'}}))
+    assert calls == [] and answer.content.startswith('PLANNER_PROTOCOL_INVALID')
+
+
+def test_research_captured_receipt_reads_file_without_network(runtime):
+    ws = runtime.base / 'test-chat'; ws.mkdir()
+    (ws / 'captured.js').write_text('new MediaRecorder(stream); ws.send(chunk)')
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+        'filename': 'search_local.py', 'code': 'raise AssertionError("must not execute local sweep")'}}),
+        json.dumps({'action': 'final', 'final': 'The supplied target capture uses MediaRecorder and ws.send; encoding details remain unresolved.'})]
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model, tools=runtime.tools,
+        messages=[Human(json.dumps({'source_url': 'https://voice-target.example/assets/app.js', 'path': 'captured.js'})),
+                  Human('Investigate https://voice-target.example audio transport')],
+        config={'configurable': {'thread_id': 'test-chat'}}))
+    assert 'supplied target capture' in answer.content
+    assert not (ws / 'search_local.py').exists()
+    assert "CAPTURE = 'captured.js'" in (ws / '_inspect_requested_target.py').read_text()
+    assert runtime.live.COUNTERS['artifact_readback'] == 0
+
+
+@pytest.mark.parametrize('text,kind', [
+    ('Investigate wss://andromeda.example/ws', 'websocket'),
+    ('Investigate API api.voice.example', 'host'),
+    ('Inspect git@github.com:org/repo.git', 'repo'),
+    ('Inspect C:\\specific\\repo', 'path'),
+    ('Inspect /mnt/c/specific/repo', 'path'),
+    ('Inspect uploaded voice_capture.js', 'file'),
+])
+def test_research_target_kinds(runtime, text, kind):
+    assert runtime.impl._research_target([Human(text)]).target_kind == kind
+
+
+def test_research_generated_get_is_bounded_and_reports_blocked_access(runtime, monkeypatch, capsys):
+    import io
+    import urllib.request
+    class Response(io.BytesIO):
+        status = 200
+        headers = {'Content-Type': 'application/javascript'}
+    calls = []
+    class Opener:
+        def open(self, request, timeout):
+            calls.append((request.full_url, request.get_method(), timeout))
+            return Response(b'x' * 40000)
+    monkeypatch.setattr(urllib.request, 'build_opener', lambda *args: Opener())
+    target = runtime.impl.ResearchTarget('https://voice-target.example/app.js', 'url', 'https://voice-target.example')
+    payload = runtime.impl._target_read_payload(target, 'test-chat')
+    exec(compile(payload['code'], '<target-probe-fixture>', 'exec'), {})
+    output = capsys.readouterr().out
+    receipt = json.loads(output.split('TARGET_ORIGIN_RESULT=', 1)[1])
+    assert calls == [('https://voice-target.example/app.js', 'GET', 10)]
+    assert receipt['bytes_observed'] == 32768 and receipt['truncated']
+    assert len(receipt['body']) == 8000
+    class Blocked:
+        def open(self, request, timeout): raise TimeoutError('password=TEST_SECRET')
+    monkeypatch.setattr(urllib.request, 'build_opener', lambda *args: Blocked())
+    exec(compile(payload['code'], '<target-probe-fixture>', 'exec'), {})
+    output = capsys.readouterr().out
+    assert 'TimeoutError' in output and 'TEST_SECRET' not in output
+
+
+def test_research_protocol_metadata_shapes(runtime):
+    assert runtime.impl._protocol_diagnostic('bare final')['shape'] == 'bare_prose'
+    d = runtime.impl._protocol_diagnostic('{"action":"final","final":"cut')
+    assert d['shape'] == 'final_envelope' and d['parse_error'] == 'JSONDecodeError'
+    d = runtime.impl._protocol_diagnostic('{"action":"final","final":"a"}{"action":"final","final":"b"}')
+    assert d['json_candidates'] == 0 and d['parse_error'] == 'ambiguous_or_rejected_object'
+
+
+def test_research_unknown_tool_does_not_trigger_substitute_execution(runtime):
+    calls = []
+    async def execute(payload): calls.append(payload)
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'nonexistent', 'input': {}}),
+                            json.dumps({'action': 'final', 'final': 'No target evidence acquired.'})]
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=execute)],
+        messages=[Human('Investigate https://voice-target.example')], config={'configurable': {'thread_id': 'test-chat'}}))
+    assert calls == []
+
+
+def test_research_target_execution_secret_and_literal_markers_are_preserved(runtime):
+    text = 'Investigate https://voice-target.example/__CAPTURE__?access_token=TEST_TOKEN'
+    target = runtime.impl._research_target([Human(text)])
+    payload = runtime.impl._target_read_payload(target, 'test-chat')
+    assert "SOURCE = 'https://voice-target.example/__CAPTURE__?access_token=TEST_TOKEN'" in payload['code']
+    compile(payload['code'], '<fixture>', 'exec')
+    assert 'TEST_TOKEN' not in runtime.impl._resolve_target_identity([Human(text)])
+    assert 'TEST_TOKEN' not in runtime.impl.redact_sensitive_text(payload['code'])

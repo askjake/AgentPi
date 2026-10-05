@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
+from urllib.parse import urlsplit
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 import logging
@@ -109,7 +110,7 @@ WINDOWS_FILE_SEARCH_RULE = (
 )
 
 
-def _resolve_target_identity(messages: list[BaseMessage]) -> str:
+def _resolve_target_identity(messages: list[BaseMessage], *, reporting: bool = True) -> str:
     """Pin the latest substantive user objective, never a tool's proposed target.
 
     Continuations search only the same ten-message horizon as planner context.
@@ -121,7 +122,7 @@ def _resolve_target_identity(messages: list[BaseMessage]) -> str:
         instruction = split_instruction_and_evidence(
             _content_to_text(getattr(message, 'content', ''))).instruction_text
         if instruction and not _is_continuation(instruction):
-            return redact_sensitive_text(instruction)[:2000]
+            return (redact_sensitive_text(instruction) if reporting else instruction)[:2000]
     return 'Unresolved in bounded user context; ask which target to investigate.'
 
 
@@ -132,6 +133,177 @@ def _windows_file_search_rejected(tool_name: str, tool_input: Any) -> bool:
         return False
     command = str(tool_input.get('command') or '')
     return bool(re.match(r'^\s*(?:dir\b|powershell(?:\.exe)?\b.*(?:Get-ChildItem|\bgci\b))', command, re.I))
+
+
+@dataclass(frozen=True)
+class ResearchTarget:
+    raw_target: str
+    target_kind: str
+    origin: str
+
+
+def _research_target(messages: list[BaseMessage]) -> Optional[ResearchTarget]:
+    """Small syntax-based target selector; evidence-only turns cannot retarget it."""
+    objective = _resolve_target_identity(messages, reporting=False)
+    if not re.search(r'\b(?:investigate|inspect|determine|research|analy[sz]e|understand)\b', objective, re.I):
+        return None
+    if _looks_like_text_transformation_request(objective):
+        return None
+    candidates = [objective]
+    # Bounded referential follow-ups may use the last explicitly named target.
+    if re.search(r'\b(?:voice demo|the target|the service|the site|the website|the websocket)\b', objective, re.I):
+        candidates += [split_instruction_and_evidence(_content_to_text(m.content)).instruction_text
+                       for m in reversed(messages[-10:]) if getattr(m, 'type', '') in {'human', 'user'}]
+    for text in candidates:
+        urls = re.findall(r'(?:https?|wss?)://[^\s<>"`]+', text, re.I)
+        urls.sort(key=lambda url: url.lower().startswith(('ws:', 'wss:')))
+        for url in urls:
+            url = url.rstrip(".,;)'\"]}")
+            parsed = urlsplit(url)
+            if parsed.hostname and not parsed.username and not parsed.password:
+                return ResearchTarget(url, 'websocket' if parsed.scheme.startswith('ws') else 'url',
+                                      parsed.scheme.lower() + '://' + parsed.netloc.lower())
+        repo = re.search(r'git@[\w.-]+:[\w./-]+', text)
+        if repo:
+            return ResearchTarget(repo[0], 'repo', repo[0])
+        path = re.search(r'(?:[A-Za-z]:\\|/mnt/)[^\n"`]+', text)
+        if path:
+            return ResearchTarget(path[0].strip(), 'path', path[0].strip())
+        host = re.search(r'\b(?:host|service|API)\s+([a-z0-9-]+(?:\.[a-z0-9-]+){2,})\b', text, re.I)
+        if host is None:
+            host = re.search(r'\b((?:api|www)\.[a-z0-9.-]+\.[a-z]{2,})\b', text, re.I)
+        if host:
+            return ResearchTarget('https://' + host[1], 'host', 'https://' + host[1])
+        file = re.search(r'\b(?:uploaded|attached)\s+(?:file\s+)?["`]?([\w.-]+\.[\w]+)', text, re.I)
+        if file:
+            return ResearchTarget(file[1], 'file', file[1])
+    return None
+
+
+def _captured_target_receipt(target: ResearchTarget, messages: list[BaseMessage]) -> Optional[dict]:
+    """Require an explicit source URL/path receipt; never trust a basename alone."""
+    for message in reversed(messages[-10:]):
+        if getattr(message, 'type', '') not in {'human', 'user', 'tool'}:
+            continue  # An assistant's unverified claim is not a capture receipt.
+        text = _content_to_text(getattr(message, 'content', ''))[:16000]
+        for receipt in _extract_json_objects(text):
+            source, path = receipt.get('source_url'), receipt.get('path')
+            if isinstance(source, str) and isinstance(path, str) and len(path) <= 512:
+                parsed = urlsplit(source)
+                if parsed.scheme.lower() + '://' + parsed.netloc.lower() == target.origin:
+                    rel = Path(path.replace('\\', '/'))
+                    if not rel.is_absolute() and ':' not in path and '..' not in rel.parts:
+                        return {'path': path, 'source_url': source}
+    return None
+
+
+def _captured_target_path(target: ResearchTarget, messages: list[BaseMessage]) -> Optional[str]:
+    receipt = _captured_target_receipt(target, messages)
+    return receipt['path'] if receipt else None
+
+
+def _target_read_payload(target: ResearchTarget, chat_id: str, captured_path: Optional[str] = None, captured_source_url: Optional[str] = None) -> dict:
+    # Fixed read-only operation, not model-generated filesystem search. No
+    # redirect following, auth guessing, WebSocket send or search-engine call.
+    code = """import json
+from pathlib import Path
+from urllib.request import Request, build_opener, HTTPRedirectHandler
+from urllib.error import HTTPError
+SOURCE = __SOURCE__
+CAPTURE = __CAPTURE__
+CAPTURE_SOURCE = __CAPTURE_SOURCE__
+LIMIT = 32768
+record = {'requested_target': SOURCE, 'source_url': CAPTURE_SOURCE if CAPTURE else SOURCE, 'status': 'blocked'}
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+try:
+    if CAPTURE:
+        root = Path.cwd().resolve()
+        path = (root / CAPTURE).resolve()
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError('capture outside workspace or unavailable')
+        with path.open('rb') as handle:
+            data = handle.read(LIMIT + 1)
+        record['provenance'] = 'supplied source_url/path receipt; origin not independently revalidated'
+        record['path'] = CAPTURE
+    else:
+        request = Request(SOURCE, headers={'Accept': 'text/html,application/javascript,text/plain', 'User-Agent': 'AgentPi-TargetInspection/1'}, method='GET')
+        with build_opener(NoRedirect()).open(request, timeout=10) as response:
+            record['http_status'] = response.status
+            record['content_type'] = response.headers.get('Content-Type', '')
+            data = response.read(LIMIT + 1)
+        record['provenance'] = 'direct URL response; redirects disabled'
+    record.update(status='ok', bytes_observed=min(len(data), LIMIT), truncated=len(data)>LIMIT,
+                  body=data[:LIMIT].decode('utf-8', errors='replace')[:8000])
+except HTTPError as exc:
+    record.update(error_type='HTTPError', http_status=exc.code)
+except Exception as exc:
+    record['error_type'] = type(exc).__name__
+print('TARGET_ORIGIN_RESULT=' + json.dumps(record, ensure_ascii=True))
+"""
+    substitutions = {'__SOURCE__': target.raw_target, '__CAPTURE__': captured_path, '__CAPTURE_SOURCE__': captured_source_url}
+    code = re.sub(r'__SOURCE__|__CAPTURE__|__CAPTURE_SOURCE__', lambda match: repr(substitutions[match[0]]), code)
+    return {'chat_id': chat_id, 'filename': '_inspect_requested_target.py', 'use_venv': False, 'code': code}
+
+
+def _target_read_status(result: Any, target: ResearchTarget) -> str:
+    text = _content_to_text(result)
+    marker = 'TARGET_ORIGIN_RESULT='
+    for line in text.splitlines():
+        if line.startswith(marker):
+            try:
+                receipt = json.loads(line[len(marker):])
+                if receipt.get('requested_target', receipt.get('source_url')) == target.raw_target:
+                    return 'ok' if receipt.get('status') == 'ok' else 'blocked'
+            except (ValueError, AttributeError):
+                pass
+    return 'unverified'
+
+
+def _local_reference_action(tool_name: str, tool_input: Any, target: ResearchTarget, captured: Optional[str]) -> bool:
+    if tool_name not in {'agent_run_python', 'agent_run_shell', 'agent_git_clone'}:
+        return False
+    text = json.dumps(tool_input, default=str).lower()
+    if captured and captured.lower() in text:
+        return False  # A matching receipt, not a filename alone, enabled this path.
+    if (target.raw_target.lower() in text and re.search(r'urlopen|build_opener|requests\.get|httpx\.get', text)
+            and not re.search(r'rglob|os\.walk|iterdir', text)):
+        return False  # Action-selection hint only; never proof of origin.
+    return bool(re.search(r'rglob|glob\(|os\.walk|iterdir|read_text|read_bytes|open\(|get-childitem|\bfind\b|\bgrep\b|\brg\b|\bcat\b|agentpi|dish-chat', text))
+
+
+TARGET_FIRST_RULE = (
+    'TARGET-FIRST RESEARCH: acquire target-origin assets/responses before unrelated local source. '
+    'Next prefer user-supplied target evidence, captured files with source URL receipts, and verified related repositories. '
+    'Known URLs can be read directly; DuckDuckGo is not required. A filename alone is not provenance. '
+    'If the target origin is absent from bounded context, ask for its URL/source instead of defaulting to this repository. '
+    'Local code is reference/hypothesis material only. If target access fails, report that before fallback. '
+    'For reference fallback after an accessible but insufficient target response, include target_gap in the tool action '
+    'explaining the missing evidence. At most two local-reference searches; then return to target evidence or report the gap.'
+)
+
+
+def _protocol_diagnostic(text: str) -> dict:
+    """Metadata only: no raw prefixes, exception messages or provider objects."""
+    safe = redact_sensitive_text(text)
+    stripped = safe.strip()
+    candidates = _extract_json_objects(safe)
+    contains_tool = bool(re.search(r'["\']action["\']\s*:\s*["\']tool', safe))
+    contains_final = bool(re.search(r'["\']action["\']\s*:\s*["\']final', safe))
+    error = 'none'
+    if not candidates and '{' in safe:
+        try:
+            json.JSONDecoder().raw_decode(safe, safe.find('{'))
+            error = 'ambiguous_or_rejected_object'
+        except (ValueError, RecursionError) as exc:
+            error = type(exc).__name__
+    shape = ('tool_directive' if contains_tool else 'final_envelope' if contains_final else
+             'bare_prose' if '{' not in safe else 'unknown_object')
+    return {'chars': len(text), 'starts_with_fence': stripped.startswith('```'),
+            'json_candidates': len(candidates), 'contains_action_final': contains_final,
+            'contains_action_tool': contains_tool, 'parse_error': error, 'shape': shape}
+
 
 
 def redact_sensitive_text(value: Any) -> str:
@@ -1158,6 +1330,7 @@ def _build_planner_prompt(
         "7. Continuation turns refer only to an unresolved user objective in the bounded recent transcript. Use the latest relevant user request and assistant next step; do not invent a task or repeat completed work. If no unresolved objective can be established, ask what to resume. New evidence updates that objective; it does not replace it.",
         EVIDENCE_RULES,
         SOURCE_FIDELITY_RULES,
+        TARGET_FIRST_RULE,
         "8. If a tool is needed, respond with one complete JSON object ONLY. A printed tool directive is not execution.",
         "9. Build large artifacts in small verified chunks. Do not put an entire GUI into one tool call; inspect actual API schemas first, then write, parse/compile, and smoke-test files separately.",
         "10. Do not run a persistent GUI mainloop in a bounded Python execution call. Preparing an app, testing it, creating a shortcut, and launching it are distinct operations.",
@@ -1235,6 +1408,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
 
     raw_user_text = _extract_last_user_text(messages)
     target_identity = _resolve_target_identity(messages)
+    research_target = _research_target(messages)
     turn = split_instruction_and_evidence(raw_user_text)
     user_text = turn.instruction_text
     recent_transcript = _render_recent_transcript(messages, limit=10)
@@ -1280,7 +1454,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
         )
 
     search_query = None
-    if _looks_like_fresh_info_request(user_text):
+    if research_target is None and _looks_like_fresh_info_request(user_text):
         search_query = user_text
     elif _looks_like_search_retry_request(user_text):
         previous_user_text = _extract_previous_user_text(messages)
@@ -1409,7 +1583,7 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     planner_model = _planner_model(model)
     direct_tool_result = (
         None
-        if genealogy_identity_required
+        if genealogy_identity_required or research_target is not None
         else await _maybe_handle_obvious_direct_task(user_text, tool_map, chat_id)
     )
     if direct_tool_result is not None:
@@ -1425,6 +1599,16 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
     returned_evidence: list[str] = []
     artifact_baseline: Optional[dict] = None
     artifact_paths: list[str] = []
+    target_attempted = False
+    target_status = 'not_attempted'
+    target_access_detail = ''
+    captured_receipt = _captured_target_receipt(research_target, messages) if research_target else None
+    captured_target = captured_receipt['path'] if captured_receipt else None
+    local_reference_count = 0
+    finalization_only = False
+    if research_target:
+        scratchpad.append('Explicit research target: ' + redact_sensitive_text(research_target.raw_target) +
+                          ' | kind=' + research_target.target_kind + '. ' + TARGET_FIRST_RULE)
     if genealogy_identity_report is not None:
         scratchpad.append(
             "GENEALOGY IDENTITY PREFLIGHT COMPLETE (deterministic tool evidence):\n"
@@ -1441,7 +1625,15 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
                 + json.dumps(relationship_anomalies, ensure_ascii=False)[:SCRATCHPAD_LIMIT]
             )
 
-    for _ in range(planner_steps):
+    for step_index in range(planner_steps):
+        if returned_tools:
+            scratchpad.append('SYNTHESIS CHECK: If existing evidence answers the question, return action=final now. '
+                              'Otherwise acquire only the specific missing target evidence; do not repeat discovery. '
+                              'Unknown framing must remain explicitly unresolved.')
+        if step_index == planner_steps - 1 and returned_tools:
+            finalization_only = True
+            scratchpad.append('FINALIZATION SLOT: Tool budget is exhausted. Return exactly one valid final action object '
+                              'using the existing evidence, including unresolved gaps. No further tools may execute.')
         planner_prompt = _build_planner_prompt(
             raw_user_text,
             recent_transcript,
@@ -1457,15 +1649,24 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
         last_text = _content_to_text(getattr(response, "content", response)).strip()
 
         payload = _pick_action_payload(last_text)
+        if finalization_only and payload and payload.get('action') != 'final':
+            payload = None  # Repair/finalization slots never repeat side effects.
         if not payload:
             protocol_failures += 1
-            logger.warning("PLANNER_PROTOCOL_REJECTED attempt=%d response_chars=%d", protocol_failures, len(last_text))
+            diagnostic = _protocol_diagnostic(last_text)
+            logger.warning('PLANNER_PROTOCOL_REJECTED attempt=%d chars=%d shape=%s parse_error=%s starts_with_fence=%s json_candidates=%d contains_action_final=%s',
+                           protocol_failures, diagnostic['chars'], diagnostic['shape'], diagnostic['parse_error'],
+                           diagnostic['starts_with_fence'], diagnostic['json_candidates'], diagnostic['contains_action_final'])
             if protocol_failures >= 2:
                 return await _finalization_failure(returned_tools, returned_evidence, chat_id, artifact_baseline, artifact_paths, target_identity)
-            scratchpad.append(
-                "PROTOCOL ERROR: previous response was not dispatched. Return exactly one complete JSON tool/final object. "
-                "Use small code chunks, not a whole application. Do not repeat previously completed actions."
-            )
+            if returned_tools and not diagnostic['contains_action_tool']:
+                finalization_only = True
+                scratchpad.append('FINALIZATION REPAIR: Do not repeat completed discovery. '
+                                  'Return exactly one valid final action object using the existing evidence. '
+                                  'Escape quotes/newlines in the final string; include unresolved gaps instead of inventing completion.')
+            else:
+                scratchpad.append('PROTOCOL ERROR: previous response was not dispatched. '
+                                  'Return exactly one complete JSON tool/final object. Do not repeat completed actions.')
             continue
         action = str(payload.get("action", "")).lower().strip()
         if action == "final":
@@ -1518,6 +1719,11 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
                                 genealogy_identity_report
                             )
                         )
+            if research_target and local_reference_count and target_status != 'ok':
+                final_text = ('Target access failed or remains unverified for ' + research_target.raw_target + '.\n'
+                              + 'Target-read evidence: ' + (target_access_detail or 'No verified target read is available.') + '\n'
+                              + 'Local code is reference material only and does not establish the target protocol.\n\n' + final_text)
+                final_text = redact_sensitive_text(final_text)
             return AIMessage(content=final_text)
         if action != "tool":
             return AIMessage(content=last_text)
@@ -1543,6 +1749,28 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
 
         tool_name = str(payload.get("tool", "")).strip()
         tool_input = payload.get("input", "")
+        target_probe = False
+        if (research_target and research_target.target_kind in {'url', 'host'} and not target_attempted
+                and chat_id and 'agent_run_python' in tool_map and tool_name in tool_map and not mcop_child):
+            tool_name = 'agent_run_python'
+            tool_input = _target_read_payload(research_target, chat_id, captured_target, captured_receipt['source_url'] if captured_receipt else None)
+            target_attempted = True
+            target_probe = True
+            scratchpad.append('TARGET-FIRST: selected bounded target-origin read before unrelated local inspection. '
+                              'A supplied capture is preferred when its source URL/path receipt matches.')
+        elif (research_target and research_target.target_kind in {'url', 'host', 'websocket'}
+              and _local_reference_action(tool_name, tool_input, research_target, captured_target)):
+            if local_reference_count >= 2:
+                scratchpad.append('REFERENCE LIMIT: Two local-reference searches exhausted. '
+                                  'This directive was not dispatched. Return to target evidence or finalize with the target limitation.')
+                continue
+            if target_status == 'ok' and not str(payload.get('target_gap') or '').strip():
+                scratchpad.append('TARGET-FIRST: local reference directive not dispatched. '
+                                  'Inspect target assets/protocol next, or state the specific target_gap before reference fallback.')
+                continue
+            local_reference_count += 1
+            scratchpad.append('LOCAL_REFERENCE: this cannot establish the external target protocol. '
+                              'Target access status=' + target_status + '. Report this limitation explicitly.')
         if tool_name not in tool_map:
             scratchpad.append(f"Tool error: requested unknown tool '{tool_name}'. Available tools: {', '.join(tool_map.keys())}")
             continue
@@ -1580,11 +1808,22 @@ async def run_coverity_tool_loop(model: Any = None, tools: Optional[list[Any]] =
         try:
             result = await _invoke_tool(selected.raw, tool_input, chat_id=chat_id)
             returned_tools.append(selected.name)
+            if target_probe:
+                target_status = _target_read_status(result, research_target)
+                if target_status != 'ok':
+                    target_access_detail = redact_sensitive_text(_content_to_text(result))[:600]
+                scratchpad.append('TARGET ACCESS: ' + target_status + '. ' +
+                                  ('Target content is available; inspect its assets/protocol before unrelated local references.'
+                                   if target_status == 'ok' else 'Target access failed or could not be verified. Report the bounded tool evidence before any reference fallback.'))
             returned_evidence.append(selected.name + ': ' + redact_sensitive_text(
                 json.dumps(redact_sensitive_value(result), ensure_ascii=False, default=str))[:2000])
             returned_evidence[:] = returned_evidence[-8:]
         except Exception as exc:
             result = f"Tool {selected.name} failed: {exc}"
+            if target_probe:
+                target_status = 'blocked'
+                target_access_detail = type(exc).__name__
+                scratchpad.append('TARGET ACCESS: blocked (' + type(exc).__name__ + '). Report this before reference fallback.')
 
         if selected.name == "agent_genealogy_identity_check":
             identity_payload = _genealogy_identity_payload(result)

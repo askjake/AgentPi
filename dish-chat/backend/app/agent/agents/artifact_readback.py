@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import re
 
-_ALLOWED = {'.py', '.html', '.css', '.js', '.ts', '.md', '.lnk', '.url', '.cmd', '.ps1'}
+_ALLOWED = {'.py', '.html', '.css', '.js', '.ts', '.md', '.lnk', '.url', '.cmd', '.ps1', '.wav', '.mp3', '.ogg', '.flac', '.m4a', '.pcm'}
 _SKIP = {'.git', '.venv', '.venv-windows', '__pycache__', 'node_modules'}
 _MAX_FILES = 512
 _MAX_BYTES = 8 * 1024 * 1024
@@ -88,7 +88,7 @@ def render(report: dict) -> str:
     for item in report['artifacts']:
         lines.append(f"Observed: {item['path']} | {item['bytes']} bytes | SHA256={item['sha256'] or 'not_verified'}")
     if not report['artifacts']:
-        lines.append('No matching app/script/shortcut artifacts were observed in this workspace.')
+        lines.append('No matching app/script/shortcut/audio artifacts were observed in this workspace.')
     if not report['complete_scan']:
         lines.append('Readback was incomplete or blocked; absence cannot be concluded.')
     lines += [

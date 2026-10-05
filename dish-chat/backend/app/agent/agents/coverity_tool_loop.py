@@ -170,7 +170,7 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
         tools, model = model, None
     tools = tools or kwargs.get('available_tools') or []
     messages = messages or kwargs.get('state_messages') or []
-    text = implementation._extract_last_user_text(messages)
+    text = implementation.split_instruction_and_evidence(implementation._extract_last_user_text(messages)).instruction_text
     chat_id = implementation._extract_chat_id(config)
     try:
         is_mcop_child = bool((config or {}).get('configurable', {}).get('mcop_child'))
@@ -259,6 +259,8 @@ async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
         COUNTERS['runtime_probe'] += 1
     answer = await implementation.run_coverity_tool_loop(
         model=model, tools=tools, messages=messages, config=config, max_steps=max_steps, **kwargs)
+    if implementation._content_to_text(answer.content).startswith('PLANNER_FINALIZATION_PARTIAL'):
+        return answer
     # A local artifact task cannot be certified by an ungrounded completion
     # sentence. Return bounded readback instead, even if a file already exists.
     # Existence alone does not certify creation this turn or functional testing.

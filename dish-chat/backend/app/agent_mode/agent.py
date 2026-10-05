@@ -14,6 +14,7 @@ from app.agent.utils import set_model_config
 from app.agent.db_utils import get_checkpointer
 from app.agent.agents.tools import get_tools_set
 from app.agent.agents.coverity_tool_loop import run_coverity_tool_loop
+from app.agent.agents.coverity_tool_loop_token_limit import redact_sensitive_text
 from app.agent_mode.thought_interceptor import interceptor
 
 settings = get_settings()
@@ -46,7 +47,7 @@ async def agent_mode_node(state: AgentModeState, config: dict[str, Any] | None =
     if messages:
         last_msg = messages[-1]
         msg_content = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
-        interceptor.thought(f"Processing user request: {msg_content[:200]}", "thinking")
+        interceptor.thought(f"Processing user request: {redact_sensitive_text(msg_content)[:200]}", "thinking")
         interceptor.context_update("chat_id", chat_id)
         interceptor.context_update("message_count", len(messages))
         interceptor.context_update("iteration", state.get("iterations", 0))
@@ -119,7 +120,7 @@ async def agent_mode_node(state: AgentModeState, config: dict[str, Any] | None =
             tool_name = tc.get('name', 'unknown')
             interceptor.thought(f"Preparing to execute: {tool_name}", "tool")
     else:
-        response_preview = str(response.content)[:200] if hasattr(response, 'content') else "..."
+        response_preview = redact_sensitive_text(response.content)[:200] if hasattr(response, 'content') else "..."
         interceptor.thought(f"LLM provided direct response: {response_preview}", "result")
         interceptor.context_update("next_action", "final_response")
 

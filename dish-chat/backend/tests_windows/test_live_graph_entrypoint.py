@@ -309,3 +309,43 @@ def test_live_fresh_search_returns_tool_output_without_model(live_graph, monkeyp
     assert "source=`ddg-lite`" in text
     assert "no LLM summarization was used" in text
     assert provider.calls == 0
+
+
+def test_executive_native_continuation_preserves_evidence(live_graph, monkeypatch):
+    _, _, live, _, _, HumanMessage, _ = live_graph
+    from langchain_core.messages import AIMessage
+    prompts, calls = [], []
+    class Planner:
+        async def ainvoke(self, messages, config=None):
+            prompts.append(messages[0].content)
+            return AIMessage(content='{"action":"final","final":"Inspect the WebSocket framing next."}')
+    class Probe:
+        name = 'agent_check_device'
+        async def ainvoke(self, payload):
+            calls.append(payload)
+            return 'timeout'
+    answer = asyncio.run(live.run_coverity_tool_loop(model=Planner(), tools=[Probe()],
+        messages=[HumanMessage(content='Determine how to inject TTS audio into the voice service.'),
+                  AIMessage(content='Next inspect the WebSocket framing.'),
+                  HumanMessage(content='proceed\nRequest URL https://example.invalid/api/conversations\n'
+                               'Status code 200 OK\nRemote address 44.255.252.90:443\nconnection keep-alive')]))
+    assert calls == []
+    assert 'WebSocket' in answer.content
+    assert 'Continuation' in prompts[0] and 'Supplied evidence' in prompts[0]
+
+
+def test_executive_native_partial_finalization_reads_audio(live_graph):
+    _, _, live, native, _, HumanMessage, _ = live_graph
+    from langchain_core.messages import AIMessage
+    class Planner:
+        replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+            'chat_id': 'executive-test', 'filename': 'make_audio_fixture.py', 'use_venv': False,
+            'code': "from pathlib import Path\nPath('fixture.wav').write_bytes(b'RIFF-test')"}}), '{invalid', '{invalid']
+        async def ainvoke(self, messages, config=None):
+            return AIMessage(content=self.replies.pop(0))
+    answer = asyncio.run(live.run_coverity_tool_loop(model=Planner(), tools=[native.agent_run_python],
+        messages=[HumanMessage(content='generate voice command files')],
+        config={'configurable': {'thread_id': 'executive-test'}}))
+    assert answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
+    assert 'fixture.wav' in answer.content
+    assert 'not a completion certificate' in answer.content

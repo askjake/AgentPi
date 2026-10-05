@@ -460,3 +460,180 @@ def test_mcop_question_helper_has_no_runtime_scope_dependency(runtime):
 
 def test_mcop_implementation_request_is_not_intercepted(runtime):
     assert not runtime.live._mcop_question('implement MCOP for this agent', [])
+
+
+HTTP_EVIDENCE = '''Request URL https://example.invalid/api/conversations
+Request method GET
+Status code 200 OK
+Remote address 44.255.252.90:443
+connection keep-alive
+'''
+
+
+@pytest.mark.parametrize('continuation', ['proceed', 'continue', 'go ahead', 'do it', 'yes', 'yes, continue', 'keep going', 'carry on', 'resume'])
+def test_executive_continuation_with_http_evidence(runtime, continuation):
+    calls, prompts = [], []
+    async def probe(payload):
+        calls.append(payload)
+        return 'ICMP timeout'
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI(json.dumps({'action': 'final', 'final': 'WebSocket framing remains to be inspected.'}))
+    runtime.model.ainvoke = model
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(
+        model=runtime.model, tools=[types.SimpleNamespace(name='agent_check_device', ainvoke=probe)],
+        messages=[Human('Investigate the voice service and determine how to inject TTS audio.'),
+                  AI('Next I need to inspect the WebSocket framing.'), Human(continuation+'\n\n'+HTTP_EVIDENCE)],
+        config={'configurable': {'thread_id': 'test-chat'}}))
+    assert calls == []
+    assert 'WebSocket' in answer.content
+    assert 'Continuation' in prompts[0]
+    assert 'inject TTS audio' in prompts[0]
+    assert 'Supplied evidence' in prompts[0]
+    assert HTTP_EVIDENCE.strip() in prompts[0]
+
+
+def test_executive_explicit_port_probe(runtime):
+    calls = []
+    async def probe(payload):
+        calls.append(payload)
+        return 'TCP connection succeeded'
+    runtime.model.replies = ['TCP connection succeeded']
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_check_device', ainvoke=probe)],
+        messages=[Human('check whether 44.255.252.90 port 443 is reachable')]))
+    assert calls == [{'ip_address': '44.255.252.90', 'check_type': 'port', 'port': 443}]
+
+
+@pytest.mark.parametrize('text', [HTTP_EVIDENCE, 'connected to 44.255.252.90', 'connection 44.255.252.90', '44.255.252.90 port 443', '```\nping 44.255.252.90\n```'])
+def test_executive_passive_text_is_not_probe(runtime, text):
+    assert not runtime.impl._looks_like_device_probe_request(text)
+
+
+def test_executive_partial_finalization_reads_real_files(runtime):
+    runtime.model.replies = [
+        json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+            'chat_id': 'test-chat', 'filename': 'commands.py', 'code': "from pathlib import Path\nPath('command.wav').write_bytes(b'RIFF-test')"}}),
+        json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+            'chat_id': 'test-chat', 'filename': 'verify.py', 'code': "print('observed fixture')"}}),
+        '{broken', '{broken']
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=runtime.tools, messages=[Human('generate files containing customer voice commands')],
+        config={'configurable': {'thread_id': 'test-chat'}}, max_steps=4))
+    assert answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
+    assert 'agent_run_python' in answer.content
+    assert 'command.wav' in answer.content
+    assert 'ARTIFACT_READBACK_ONLY' in answer.content
+    assert 'not a completion certificate' in answer.content
+    assert runtime.live.COUNTERS['artifact_readback'] == 1
+
+
+def test_executive_no_execution_protocol_failure(runtime):
+    runtime.model.replies = ['{broken', '{broken']
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        messages=[Human('inspect the voice protocol')], max_steps=2))
+    assert answer.content.startswith('PLANNER_PROTOCOL_INVALID')
+    assert runtime.live.COUNTERS['artifact_readback'] == 0
+
+
+def test_executive_secret_execution_and_context_copies(runtime):
+    original = {'code': 'password="TEST_SECRET"\n# Authorization: Bearer TEST_REDACT_ME'}
+    calls, prompts = [], []
+    replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': original}),
+               json.dumps({'action': 'final', 'final': 'Tool returned.'})]
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI(replies.pop(0))
+    async def execute(payload):
+        calls.append(payload)
+        return {'access_token': 'TEST_RESULT_SECRET', 'status': 'returned'}
+    runtime.model.ainvoke = model
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=execute)],
+        messages=[Human('run a Python script')]))
+    assert calls == [original]
+    assert '[REDACTED]' in prompts[1]
+    assert all(secret not in prompts[1] for secret in ['TEST_SECRET', 'TEST_REDACT_ME', 'TEST_RESULT_SECRET'])
+
+
+def test_executive_evidence_scope_rules_reach_model(runtime):
+    prompt = runtime.impl._build_planner_prompt('proceed\n'+HTTP_EVIDENCE+'content-type: text/html',
+        'User: Determine voice transport; REST /turns persists records, WebSocket framing unknown.', '', [], [], None)
+    assert 'ICMP' in prompt and 'observation time' in prompt
+    assert 'text/html' in prompt and 'JSON health' in prompt
+    assert 'persistence' in prompt and 'transport' in prompt and 'audio framing' in prompt
+
+
+@pytest.mark.parametrize('value', [
+    'Authorization: Bearer TEST_SECRET', 'Bearer TEST_SECRET',
+    '"access_token": "TEST_SECRET"', "'id_token': 'TEST_SECRET'",
+    'refresh_token=TEST_SECRET', 'password="TEST_SECRET"',
+    'passwd=TEST_SECRET', 'secret=TEST_SECRET', 'api_key=TEST_SECRET',
+    'api token: TEST_SECRET', 'AWS_SECRET_ACCESS_KEY=TEST_SECRET',
+    'Cookie: session=TEST_SECRET; other=TEST_SECRET', 'session_token=TEST_SECRET',
+    'ACCESS_TOKEN = "TEST_SECRET"',
+])
+def test_executive_secret_forms(runtime, value):
+    result = runtime.impl.redact_sensitive_text(value)
+    assert 'TEST_SECRET' not in result
+    assert '[REDACTED]' in result
+
+
+def test_executive_continuation_context_is_bounded(runtime):
+    messages = [Human('old objective must disappear')] + [AI('recent evidence') for _ in range(12)]
+    assert 'old objective' not in runtime.impl._render_recent_transcript(messages)
+    assert len(runtime.impl._render_recent_transcript([Human('x'*100000)])) < 4100
+
+
+def test_executive_partial_readback_never_claims_existing_file_created(runtime):
+    workspace = runtime.base / 'test-chat'
+    workspace.mkdir()
+    (workspace / 'old.py').write_text('# old fixture')
+    async def error_result(payload):
+        return {'error': 'execution refused', 'password': 'TEST_SECRET'}
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {}}), '{bad', '{bad']
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=error_result)],
+        messages=[Human('create a Python script')], config={'configurable': {'thread_id': 'test-chat'}}))
+    assert answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
+    assert 'execution refused' in answer.content
+    assert 'TEST_SECRET' not in answer.content
+    assert 'old.py' in answer.content
+    assert 'does not prove creation this turn' in answer.content
+
+
+def test_executive_summarizer_redacts_before_truncating(runtime):
+    prompts = []
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI('returned')
+    runtime.model.ainvoke = model
+    asyncio.run(runtime.impl._summarize_tool_result(runtime.model, 'report',
+        'password="' + 'TEST_SECRET'*2000 + '"'))
+    assert 'TEST_SECRET' not in prompts[0]
+
+
+def test_executive_evidence_does_not_start_mcop_demo(runtime):
+    runtime.model.replies = [json.dumps({'action': 'final', 'final': 'Evidence received.'})]
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model, tools=runtime.tools,
+        messages=[Human('proceed\n```\ntest MCOP in action\n```')]))
+    assert runtime.mcop_tool.calls == []
+
+
+@pytest.mark.parametrize('instruction', ['login to the voice demo', 'log the response', 'evidence should be checked'])
+def test_executive_normal_instruction_not_header_prefix(runtime, instruction):
+    assert runtime.impl.split_instruction_and_evidence(instruction).instruction_text == instruction
+
+
+@pytest.mark.parametrize('text', ['proceed', 'proceed\n```\nStatus code 200 OK\n```'])
+def test_executive_plain_continuation_uses_bounded_prior_objective(runtime, text):
+    prompts = []
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI('{"action":"final","final":"Inspect protocol next."}')
+    runtime.model.ainvoke = model
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        messages=[Human('Investigate voice audio framing'), AI('Next inspect the WebSocket handshake'), Human(text)]))
+    assert 'Investigate voice audio framing' in prompts[0]
+    assert 'Next inspect the WebSocket handshake' in prompts[0]
+    assert 'Continuation:' in prompts[0]

@@ -598,7 +598,8 @@ def test_executive_partial_readback_never_claims_existing_file_created(runtime):
     assert answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
     assert 'execution refused' in answer.content
     assert 'TEST_SECRET' not in answer.content
-    assert 'old.py' in answer.content
+    assert 'old.py' not in answer.content
+    assert 'Older workspace artifacts omitted: 1' in answer.content
     assert 'does not prove creation this turn' in answer.content
 
 
@@ -637,3 +638,237 @@ def test_executive_plain_continuation_uses_bounded_prior_objective(runtime, text
     assert 'Investigate voice audio framing' in prompts[0]
     assert 'Next inspect the WebSocket handshake' in prompts[0]
     assert 'Continuation:' in prompts[0]
+
+
+def test_turn_recovery_excludes_historical_workspace(runtime):
+    ws = runtime.base / 'test-chat'; ws.mkdir()
+    for name in ['old_cart_file.py', 'old_rtr_file.py', 'old_voice_file.mp3']:
+        (ws / name).write_text('old')
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+        'chat_id': 'test-chat', 'filename': name, 'code': 'print("inspected")'}})
+        for name in ['find_ws_voice.py', 'read_voice_transport.py']] + ['{invalid', '{invalid']
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model, tools=runtime.tools,
+        messages=[Human('Investigate the voice-demo Andromeda transport')],
+        config={'configurable': {'thread_id': 'test-chat'}}, max_steps=4))
+    assert answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
+    assert 'find_ws_voice.py' in answer.content and 'read_voice_transport.py' in answer.content
+    assert 'created_this_turn' in answer.content
+    assert all(name not in answer.content for name in ['old_cart_file.py', 'old_rtr_file.py', 'old_voice_file.mp3'])
+    assert 'Older workspace artifacts omitted: 3' in answer.content
+
+
+def test_turn_snapshot_detects_modified_with_preserved_metadata(runtime):
+    reader = importlib.import_module('app.agent.agents.artifact_readback')
+    ws = runtime.base / 'test-chat'; ws.mkdir()
+    path = ws / 'analysis.txt'; path.write_text('before')
+    stat = path.stat()
+    before = reader.readback(runtime.base, 'test-chat')
+    path.write_text('after!')
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    delta = reader.turn_changes(before, reader.readback(runtime.base, 'test-chat'))
+    assert len(delta['artifacts']) == 1
+    assert delta['artifacts'][0]['change'] == 'modified_this_turn'
+
+
+def test_turn_snapshot_unchanged_and_render_bounds(runtime):
+    reader = importlib.import_module('app.agent.agents.artifact_readback')
+    ws = runtime.base / 'test-chat'; ws.mkdir()
+    for index in range(300):
+        (ws / f'old_{index:03}.py').write_text('before')
+    before = reader.readback(runtime.base, 'test-chat')
+    empty = reader.turn_changes(before, reader.readback(runtime.base, 'test-chat'))
+    assert empty['artifacts'] == []
+    assert 'old_000.py' not in reader.render_turn(empty)
+    for path in ws.iterdir():
+        path.write_text('changed')
+    delta = reader.turn_changes(before, reader.readback(runtime.base, 'test-chat'), preferred_paths=['old_299.py'])
+    assert len(delta['artifacts']) <= reader._MAX_TURN_ARTIFACTS
+    assert delta['artifacts'][0]['path'].endswith('old_299.py')
+    assert len(reader.render_turn(delta)) <= reader._MAX_TURN_OUTPUT_CHARS
+    assert delta['omitted_changes'] > 0
+
+
+def test_turn_snapshot_incomplete_baseline_does_not_invent_creation(runtime):
+    reader = importlib.import_module('app.agent.agents.artifact_readback')
+    ws = runtime.base / 'test-chat'; ws.mkdir()
+    (ws / 'existing.py').write_text('old')
+    after = reader.readback(runtime.base, 'test-chat')
+    before = {**after, 'artifacts': [], 'complete_scan': False, 'inventory_complete': False}
+    delta = reader.turn_changes(before, after)
+    assert delta['artifacts'] == []
+    assert not delta['complete_scan']
+    assert 'incomplete' in reader.render_turn(delta).lower()
+
+
+def test_turn_target_identity_survives_local_reference_and_continuation(runtime):
+    prompts = []
+    replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {'code': 'print("local reference")'}}),
+               json.dumps({'action': 'final', 'final': 'Local audio/webm is a reference hypothesis only.'})]
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI(replies.pop(0))
+    async def local(payload):
+        return 'AgentPi/dish-chat/frontend/enhanced/static/js/dashboard.js uses MediaRecorder(audio/webm)'
+    runtime.model.ainvoke = model
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_python', ainvoke=local)],
+        messages=[Human('Investigate how https://voice-target.example sends audio to wss://andromeda.example/ws'),
+                  AI('Inspect the target bundle next.'), Human('proceed')]))
+    assert 'Requested target/objective:' in prompts[1]
+    assert 'https://voice-target.example' in prompts[1]
+    assert 'LOCAL_IMPLEMENTATION' in prompts[1] and 'REFERENCE_SOURCE' in prompts[1]
+    assert 'cannot prove' in prompts[1]
+    assert 'dashboard.js' in prompts[1]
+
+
+def test_turn_target_bundle_and_user_evidence_remain_usable(runtime):
+    prompt = runtime.impl._build_planner_prompt(
+        'Investigate https://voice-target.example\nRequest URL https://voice-target.example/assets/app.js\n'
+        'WebSocket URL wss://andromeda.example/ws\nnew MediaRecorder(...) audio/webm', '', '', [], [], None)
+    assert 'TARGET_SOURCE' in prompt and 'USER_SUPPLIED_EVIDENCE' in prompt
+    assert 'https://voice-target.example/assets/app.js' in prompt
+    assert 'may support target-specific claims' in prompt
+    assert 'INFERENCE' in prompt
+
+
+def test_turn_windows_file_inspection_guidance(runtime, monkeypatch):
+    monkeypatch.setattr(runtime.impl, 'build_host_context', lambda: 'You are running natively on Windows.')
+    prompt = runtime.impl._build_planner_prompt('Recursively inspect the target source files', '', '', [], [], None)
+    assert 'dir' in prompt and 'powershell' in prompt
+    assert 'bounded filesystem search' in prompt and 'agent_run_python' in prompt
+
+
+def test_turn_windows_rejected_search_uses_python_without_shell_dispatch(runtime, monkeypatch):
+    monkeypatch.setattr(runtime.impl, 'build_host_context', lambda: 'You are running natively on Windows.')
+    calls = []
+    async def shell(payload):
+        calls.append(payload)
+        raise AssertionError('unsupported file-search binary must not be dispatched')
+    runtime.model.replies = [
+        json.dumps({'action': 'tool', 'tool': 'agent_run_shell', 'input': {'command': 'dir /s /b source'}}),
+        json.dumps({'action': 'tool', 'tool': 'agent_run_shell', 'input': {'command': 'powershell -Command Get-ChildItem -Recurse'}}),
+        json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+            'chat_id': 'test-chat', 'filename': 'inspect_source.py',
+            'code': "from pathlib import Path\nprint([p.name for p in list(Path('.').iterdir())[:10]])"}}),
+        json.dumps({'action': 'final', 'final': 'Inspected the bounded local directory.'})]
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[*runtime.tools, types.SimpleNamespace(name='agent_run_shell', ainvoke=shell)],
+        messages=[Human('Recursively inspect local source for reference')],
+        config={'configurable': {'thread_id': 'test-chat'}}, max_steps=4))
+    assert calls == []
+    assert (runtime.base / 'test-chat' / 'inspect_source.py').exists()
+    assert 'Inspected' in answer.content
+
+
+def test_turn_snapshot_failure_does_not_dump_historical_files(runtime, monkeypatch):
+    ws = runtime.base / 'test-chat'; ws.mkdir()
+    (ws / 'old_cart_file.py').write_text('old')
+    original = runtime.live._artifact_snapshot
+    count = 0
+    async def snapshot(chat_id):
+        nonlocal count
+        count += 1
+        if count == 1:
+            raise OSError('baseline unavailable')
+        return await original(chat_id)
+    monkeypatch.setattr(runtime.live, '_artifact_snapshot', snapshot)
+    runtime.model.replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+        'chat_id': 'test-chat', 'filename': 'inspect.py', 'code': 'print("observed")'}}), '{invalid', '{invalid']
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model, tools=runtime.tools,
+        messages=[Human('Investigate voice transport')], config={'configurable': {'thread_id': 'test-chat'}}))
+    assert 'baseline_unavailable' in answer.content
+    assert 'old_cart_file.py' not in answer.content
+    assert 'created_this_turn' not in answer.content
+
+
+def test_turn_snapshot_touch_is_not_material_edit(runtime):
+    reader = importlib.import_module('app.agent.agents.artifact_readback')
+    ws = runtime.base / 'test-chat'; ws.mkdir()
+    path = ws / 'old.py'; path.write_text('unchanged')
+    before = reader.readback(runtime.base, 'test-chat')
+    stat = path.stat(); os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1000000000))
+    delta = reader.turn_changes(before, reader.readback(runtime.base, 'test-chat'))
+    assert delta['artifacts'] == []
+    assert delta['historical_omitted'] == 1
+
+
+def test_turn_snapshot_large_file_uses_metadata_without_unbounded_hash(runtime):
+    reader = importlib.import_module('app.agent.agents.artifact_readback')
+    ws = runtime.base / 'test-chat'; ws.mkdir()
+    path = ws / 'large.wav'
+    with path.open('wb') as handle:
+        handle.truncate(reader._MAX_BYTES + 1)
+    before = reader.readback(runtime.base, 'test-chat')
+    with path.open('ab') as handle:
+        handle.write(b'x')
+    delta = reader.turn_changes(before, reader.readback(runtime.base, 'test-chat'))
+    assert delta['artifacts'][0]['change'] == 'modified_this_turn'
+    assert delta['artifacts'][0]['sha256'] is None
+    assert 'content not verified' in delta['artifacts'][0]['basis']
+    assert not delta['complete_scan']
+
+
+def test_turn_target_new_request_supersedes_previous_target(runtime):
+    target = runtime.impl._resolve_target_identity([
+        Human('Investigate https://old.example'), AI('Old target protocol remains unknown'),
+        Human('Now investigate https://new.example')])
+    assert 'new.example' in target and 'old.example' not in target
+    unknown = runtime.impl._resolve_target_identity([Human('proceed')])
+    assert 'Unresolved' in unknown
+
+
+def test_turn_source_fidelity_applies_to_summary(runtime):
+    prompts = []
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI('Local code is a reference only; target framing is unverified.')
+    runtime.model.ainvoke = model
+    asyncio.run(runtime.impl._summarize_tool_result(runtime.model, 'proceed',
+        'Local AgentPi dashboard.js uses MediaRecorder/audio-webm',
+        target_identity='Investigate https://voice-target.example'))
+    assert 'Requested target/objective: Investigate https://voice-target.example' in prompts[0]
+    assert 'LOCAL_IMPLEMENTATION' in prompts[0] and 'cannot prove' in prompts[0]
+
+
+def test_turn_target_bundle_is_retained_in_following_planner_context(runtime):
+    prompts = []
+    replies = [json.dumps({'action': 'tool', 'tool': 'inspect_target', 'input': {'url': 'https://voice-target.example/assets/app.js'}}),
+               json.dumps({'action': 'final', 'final': 'The observed target bundle configures audio/webm; live transport remains untested.'})]
+    async def inspect_target(payload):
+        return {'source_url': payload['url'], 'http_status': 200, 'body': 'new MediaRecorder(stream, {mimeType: "audio/webm"})'}
+    async def model(messages, config=None):
+        prompts.append(messages[0].content)
+        return AI(replies.pop(0))
+    runtime.model.ainvoke = model
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='inspect_target', ainvoke=inspect_target)],
+        messages=[Human('Investigate https://voice-target.example audio framing')]))
+    assert 'source_url' in prompts[1] and 'https://voice-target.example/assets/app.js' in prompts[1]
+    assert 'audio/webm' in prompts[1] and 'TARGET_SOURCE' in prompts[1]
+    assert 'may support target-specific claims' in prompts[1]
+
+
+def test_turn_target_stream_research_does_not_take_local_video_shortcut(runtime):
+    calls = []
+    async def shell(payload):
+        calls.append(payload)
+        return 'unrelated local video devices'
+    runtime.model.replies = [json.dumps({'action': 'final', 'final': 'The target bundle and WebSocket framing still need inspection.'})]
+    answer = asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_shell', ainvoke=shell)],
+        messages=[Human('Investigate how https://voice-target.example streams audio to the Andromeda WebSocket')]))
+    assert calls == []
+    assert 'target bundle' in answer.content
+
+
+def test_turn_windows_filesystem_request_reaches_planner(runtime, monkeypatch):
+    monkeypatch.setattr(runtime.impl, 'build_host_context', lambda: 'You are running natively on Windows.')
+    calls = []
+    async def shell(payload):
+        calls.append(payload)
+        return 'unexpected shell'
+    runtime.model.replies = [json.dumps({'action': 'final', 'final': 'Use a bounded Python filesystem inspection.'})]
+    asyncio.run(runtime.live.run_coverity_tool_loop(model=runtime.model,
+        tools=[types.SimpleNamespace(name='agent_run_shell', ainvoke=shell)],
+        messages=[Human('list files recursively in the local source directory')]))
+    assert calls == []

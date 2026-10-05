@@ -349,3 +349,33 @@ def test_executive_native_partial_finalization_reads_audio(live_graph):
     assert answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
     assert 'fixture.wav' in answer.content
     assert 'not a completion certificate' in answer.content
+
+
+
+def test_turn_scoped_recovery_native_executor(live_graph):
+    _, _, live, native, _, HumanMessage, base = live_graph
+    from langchain_core.messages import AIMessage
+    workspace = base / 'turn-recovery'; workspace.mkdir()
+    (workspace / 'old_cart_file.py').write_text('historical')
+    (workspace / 'old_rtr_file.py').write_text('historical')
+    (workspace / 'analysis.txt').write_text('old analysis')
+    class Planner:
+        replies = [json.dumps({'action': 'tool', 'tool': 'agent_run_python', 'input': {
+            'chat_id': 'turn-recovery', 'filename': 'find_ws_voice.py', 'use_venv': False,
+            'code': "from pathlib import Path\nPath('analysis.txt').write_text('new analysis')"}}), '{invalid', '{invalid']
+        async def ainvoke(self, messages, config=None):
+            return AIMessage(content=self.replies.pop(0))
+    answer = asyncio.run(live.run_coverity_tool_loop(model=Planner(), tools=[native.agent_run_python],
+        messages=[HumanMessage(content='Inspect the voice transport')],
+        config={'configurable': {'thread_id': 'turn-recovery'}}))
+    assert answer.content.startswith('PLANNER_FINALIZATION_PARTIAL')
+    assert 'created_this_turn' in answer.content and 'find_ws_voice.py' in answer.content
+    assert 'modified_this_turn' in answer.content and 'analysis.txt' in answer.content
+    assert 'old_cart_file.py' not in answer.content and 'old_rtr_file.py' not in answer.content
+    assert 'not a completion certificate' in answer.content
+
+
+def test_windows_search_allowlist_remains_restricted(live_graph):
+    _, _, _, native, *_ = live_graph
+    assert not native._validate_command('dir /s /b source')[0]
+    assert not native._validate_command('powershell -Command Get-ChildItem -Recurse')[0]

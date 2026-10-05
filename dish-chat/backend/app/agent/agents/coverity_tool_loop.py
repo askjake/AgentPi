@@ -17,7 +17,7 @@ import json
 from langchain_core.messages import AIMessage
 
 from . import coverity_tool_loop_token_limit as implementation
-from .artifact_readback import readback, render
+from .artifact_readback import readback, render, turn_changes, render_turn
 
 logger = logging.getLogger(__name__)
 CONTRACT = 'agentpi-live-planner-v1'
@@ -162,6 +162,17 @@ async def _artifact_observation(chat_id: str | None) -> str:
     from app.agent_mode.tools import BASE_AGENT_WORKDIR
     COUNTERS['artifact_readback'] += 1
     return render(await asyncio.to_thread(readback, Path(BASE_AGENT_WORKDIR), chat_id))
+
+
+async def _artifact_snapshot(chat_id: str | None) -> dict:
+    from app.agent_mode.tools import BASE_AGENT_WORKDIR
+    return await asyncio.to_thread(readback, Path(BASE_AGENT_WORKDIR), chat_id)
+
+
+async def _turn_artifact_observation(chat_id: str | None, baseline: dict, preferred_paths=()) -> str:
+    COUNTERS['artifact_readback'] += 1
+    after = await _artifact_snapshot(chat_id)
+    return render_turn(turn_changes(baseline, after, preferred_paths))
 
 
 async def run_coverity_tool_loop(model: Any = None, tools=None, messages=None,
